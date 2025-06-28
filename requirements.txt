@@ -1,0 +1,10 @@
+tensorflow
+scikit-learn
+numpy
+matplotlib
+pandas
+tk
+folium
+geopy
+openrouteservice
+requests
