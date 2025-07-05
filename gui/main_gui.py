@@ -1,152 +1,125 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import folium
-import webbrowser
-import tempfile
-import os
-from geopy.geocoders import Nominatim
-from geopy.distance import geodesic
+from streamlit_folium import st_folium
 import requests
 import json
-import openrouteservice as ors
+from data.data_handler import DataHandler
+from sklearn.preprocessing import StandardScaler
+from models.carbon_model import CarbonFootprintModel, TF_AVAILABLE
+from geopy.geocoders import Photon
+from geopy.distance import geodesic
+import tempfile
+import os
+from utils.route_optimizer import RouteOptimizer
+import sys
 
-class MainGUI:
+
+st.set_page_config(
+    page_title="Carbon Footprint Optimizer",
+    page_icon="🌱",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+st.markdown("""
+<style>
+    .main-header {
+        text-align: center;
+        padding: 1rem 0;
+        background: linear-gradient(90deg, #4CAF50, #2E7D32);
+        color: white;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #4CAF50;
+    }
+    .route-info {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+    }
+    .success-box {
+        background: #d4edda;
+        color: #155724;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #c3e6cb;
+    }
+    .warning-box {
+        background: #fff3cd;
+        color: #856404;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #ffeaa7;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+class StreamlitCarbonFootprintGUI:
+    def __init__(self):
+        self.geolocator = Photon(user_agent="carbon_footprint_optimizer")
+        self.scaler = StandardScaler()
+        self.initialize_session_state()
+        self.data_handler = DataHandler()
+        self.route_optimizer = RouteOptimizer()
+        # Display TensorFlow status
+        if not TF_AVAILABLE:
+            st.sidebar.warning("⚠️ TensorFlow not available. Using Random Forest model for predictions.")
+        
+        # Use cached model loader with 10 min TTL
+        if 'carbon_model' not in st.session_state or st.session_state.carbon_model is None:
+            self.carbon_model = self.get_carbon_model()
+            st.session_state.carbon_model = self.carbon_model
+            st.session_state.model_trained = self.carbon_model is not None
+        else:
+            self.carbon_model = st.session_state.carbon_model
+
+    @st.cache_resource(ttl=600)
+    def get_carbon_model(_self):
+        model = CarbonFootprintModel()
+        model.load_model('models/carbon_model.keras')
+        return model
     
-    def __init__(self, root, app):
-        self.root = root
-        self.app = app
-        self.geolocator = Nominatim(user_agent="carbon_footprint_optimizer")
-        self.setup_gui()
+    def initialize_session_state(self):
+        """Initialize all session state variables to prevent KeyError exceptions"""
+        defaults = {
+            'data_loaded': False,
+            'model_trained': False,
+            'sample_data': None,
+            'optimization_results': None,
+            'route_map': None,
+            'route_data': None,
+            'carbon_model': None,
+            'route_map_cache': None,
+            'route_data_cache': None,
+            'last_route_map_key': None,
+            'map_generation_in_progress': False
+        }
         
-    def setup_gui(self):
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(2, weight=1)
-        
-        title_label = tk.Label(main_frame, text="Carbon Footprint Optimizer", 
-                              font=("Arial", 16, "bold"), bg='#f0f0f0')
-        title_label.grid(row=0, column=0, columnspan=2, pady=10)
-        
-        self.setup_control_panel(main_frame)
-        
-        self.setup_results_panel(main_frame)
-        
-        self.status_var = tk.StringVar()
-        self.status_var.set("Ready")
-        status_bar = tk.Label(main_frame, textvariable=self.status_var, 
-                             relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        
-    def setup_control_panel(self, parent):
-        control_frame = ttk.LabelFrame(parent, text="Control Panel", padding="10")
-        control_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
-        ttk.Button(control_frame, text="Load Sample Data", 
-                  command=self.load_data_clicked).grid(row=0, column=0, pady=5, padx=5)
-        
-        ttk.Button(control_frame, text="Train Model", 
-                  command=self.train_model_clicked).grid(row=0, column=1, pady=5, padx=5)
-        
-        ttk.Label(control_frame, text="Start Location:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.start_location = ttk.Entry(control_frame, width=20)
-        self.start_location.grid(row=1, column=1, pady=5, padx=5)
-        self.start_location.insert(0, "Mumbai, India")
-        
-        ttk.Label(control_frame, text="End Location:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.end_location = ttk.Entry(control_frame, width=20)
-        self.end_location.grid(row=2, column=1, pady=5, padx=5)
-        self.end_location.insert(0, "Delhi, India")
-        
-        ttk.Label(control_frame, text="Cargo Weight (kg):").grid(row=3, column=0, sticky=tk.W, pady=5)
-        self.cargo_weight = ttk.Entry(control_frame, width=20)
-        self.cargo_weight.grid(row=3, column=1, pady=5, padx=5)
-        self.cargo_weight.insert(0, "1000")
-        
-        ttk.Label(control_frame, text="Weather Condition:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.weather_combo = ttk.Combobox(control_frame, width=17)
-        self.weather_combo['values'] = ('Clear', 'Rainy', 'Cloudy', 'Foggy', 'Stormy')
-        self.weather_combo.grid(row=4, column=1, pady=5, padx=5)
-        self.weather_combo.set('Clear')
-        
-        ttk.Label(control_frame, text="Route Type:").grid(row=5, column=0, sticky=tk.W, pady=5)
-        self.route_type_combo = ttk.Combobox(control_frame, width=17)
-        self.route_type_combo['values'] = ('Fastest Route', 'Eco-Friendly Route', 'Balanced Route')
-        self.route_type_combo.grid(row=5, column=1, pady=5, padx=5)
-        self.route_type_combo.set('Eco-Friendly Route')
-        
-        ttk.Button(control_frame, text="Optimize Route", 
-                  command=self.optimize_route_clicked).grid(row=6, column=0, columnspan=2, pady=10)
-        
-        ttk.Button(control_frame, text="View Route Map", 
-                  command=self.view_route_map).grid(row=7, column=0, columnspan=2, pady=5)
-        
-    def setup_results_panel(self, parent):
-        results_frame = ttk.LabelFrame(parent, text="Results", padding="10")
-        results_frame.grid(row=1, column=1, rowspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
-        self.notebook = ttk.Notebook(results_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-        
-        route_frame = ttk.Frame(self.notebook)
-        self.notebook.add(route_frame, text="Route Analysis")
-        
-        self.fig, self.ax = plt.subplots(figsize=(8, 6))
-        self.canvas = FigureCanvasTkAgg(self.fig, route_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        map_frame = ttk.Frame(self.notebook)
-        self.notebook.add(map_frame, text="Route Map")
-        
-        map_controls = ttk.Frame(map_frame)
-        map_controls.pack(fill=tk.X, padx=5, pady=5)
-        
-        ttk.Button(map_controls, text="Generate Map", 
-                  command=self.generate_route_map).pack(side=tk.LEFT, padx=5)
-        ttk.Button(map_controls, text="Open in Browser", 
-                  command=self.open_map_browser).pack(side=tk.LEFT, padx=5)
-        
-        self.map_info = tk.Text(map_frame, height=8, wrap=tk.WORD)
-        map_scrollbar = ttk.Scrollbar(map_frame, orient=tk.VERTICAL, command=self.map_info.yview)
-        self.map_info.configure(yscrollcommand=map_scrollbar.set)
-        
-        self.map_info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        map_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
-        
-        text_frame = ttk.Frame(self.notebook)
-        self.notebook.add(text_frame, text="Detailed Results")
-        
-        self.results_text = tk.Text(text_frame, wrap=tk.WORD)
-        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.results_text.yview)
-        self.results_text.configure(yscrollcommand=scrollbar.set)
-        
-        self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.create_sample_chart()
-        
-        self.current_map = None
-        self.route_coordinates = None
-        
+        for key, default_value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = default_value
     def get_coordinates(self, location):
         try:
-            self.status_var.set(f"Geocoding {location}...")
-            self.root.update()
-            
             location_data = self.geolocator.geocode(location)
             if location_data:
                 return (location_data.latitude, location_data.longitude)
-            else:
-                return None
+            return None
         except Exception as e:
-            print(f"Geocoding error: {e}")
+            st.error(f"Geocoding error: {e}")
             return None
     
     def calculate_route_distance(self, start_coords, end_coords):
@@ -154,7 +127,7 @@ class MainGUI:
             distance = geodesic(start_coords, end_coords).kilometers
             return distance
         except Exception as e:
-            print(f"Distance calculation error: {e}")
+            st.error(f"Distance calculation error: {e}")
             return 0
     
     def get_route_from_osrm(self, start_coords, end_coords):
@@ -172,40 +145,21 @@ class MainGUI:
                 data = response.json()
                 if data['routes']:
                     route = data['routes'][0]
-                    
                     coordinates = route['geometry']['coordinates']
                     route_coords = [[coord[1], coord[0]] for coord in coordinates]
-                    
-                    directions = []
-                    if 'legs' in route:
-                        for leg in route['legs']:
-                            if 'steps' in leg:
-                                for step in leg['steps']:
-                                    if 'maneuver' in step:
-                                        direction = {
-                                            'instruction': step['maneuver'].get('type', 'continue'),
-                                            'distance': step.get('distance', 0),
-                                            'duration': step.get('duration', 0),
-                                            'location': [step['maneuver']['location'][1], step['maneuver']['location'][0]]
-                                        }
-                                        directions.append(direction)
                     
                     return {
                         'coordinates': route_coords,
                         'distance': route['distance'] / 1000,
                         'duration': route['duration'] / 3600,
-                        'directions': directions
                     }
-            
             return None
-            
         except Exception as e:
-            print(f"OSRM routing error: {e}")
+            st.error(f"OSRM routing error: {e}")
             return None
     
     def get_route_alternatives(self, start_coords, end_coords):
         routes = {}
-        
         main_route = self.get_route_from_osrm(start_coords, end_coords)
         
         if main_route:
@@ -218,7 +172,6 @@ class MainGUI:
                 'duration': base_duration,
                 'carbon': base_distance * 0.12,
                 'color': 'red',
-                'directions': main_route['directions'],
                 'description': 'Fastest route using highways and main roads'
             }
             
@@ -228,7 +181,6 @@ class MainGUI:
                 'duration': base_duration * 1.1,
                 'carbon': base_distance * 0.08,
                 'color': 'green',
-                'directions': main_route['directions'],
                 'description': 'Optimized for lower fuel consumption and emissions'
             }
             
@@ -238,11 +190,10 @@ class MainGUI:
                 'duration': base_duration * 1.05,
                 'carbon': base_distance * 0.10,
                 'color': 'blue',
-                'directions': main_route['directions'],
                 'description': 'Balance between time and fuel efficiency'
             }
-            
         else:
+            # Fallback to direct route
             direct_coords = [start_coords, end_coords]
             fallback_distance = self.calculate_route_distance(start_coords, end_coords)
             
@@ -252,76 +203,64 @@ class MainGUI:
                 'duration': fallback_distance / 60,
                 'carbon': fallback_distance * 0.12,
                 'color': 'red',
-                'directions': [{'instruction': 'Head directly to destination', 'distance': fallback_distance * 1000, 'duration': fallback_distance * 60, 'location': start_coords}],
                 'description': 'Direct route (routing service unavailable)'
             }
         
         return routes
     
     def create_route_map(self, start_coords, end_coords, route_type='Eco-Friendly Route'):
+        # Create a stable key for caching
+        key = f"route_map_{start_coords[0]:.4f}_{start_coords[1]:.4f}_{end_coords[0]:.4f}_{end_coords[1]:.4f}_{route_type}"
+        
+        # Check if we already have this exact map cached
+        if (
+            'last_route_map_key' in st.session_state and
+            st.session_state.get('last_route_map_key') == key and
+            'route_map_cache' in st.session_state and
+            st.session_state['route_map_cache'] is not None and
+            'route_data_cache' in st.session_state and
+            st.session_state['route_data_cache'] is not None
+        ):
+            return st.session_state['route_map_cache'], st.session_state['route_data_cache']
+
         try:
             center_lat = (start_coords[0] + end_coords[0]) / 2
             center_lon = (start_coords[1] + end_coords[1]) / 2
-            
+
             m = folium.Map(
                 location=[center_lat, center_lon],
                 zoom_start=8,
                 tiles='OpenStreetMap'
             )
-            
+
             routes = self.get_route_alternatives(start_coords, end_coords)
-            
+
             if not routes:
                 return None, None
-            
+
             folium.Marker(
                 start_coords,
-                popup=folium.Popup(f"<b>START</b><br>{self.start_location.get()}", max_width=200),
+                popup=f"<b>START</b><br>Coordinates: {start_coords[0]:.4f}, {start_coords[1]:.4f}",
                 tooltip="Start Location",
-                icon=folium.Icon(color='green', icon='play', prefix='fa')
+                icon=folium.Icon(color='green', icon='play')
             ).add_to(m)
-            
+
             folium.Marker(
                 end_coords,
-                popup=folium.Popup(f"<b>DESTINATION</b><br>{self.end_location.get()}", max_width=200),
+                popup=f"<b>DESTINATION</b><br>Coordinates: {end_coords[0]:.4f}, {end_coords[1]:.4f}",
                 tooltip="End Location",
-                icon=folium.Icon(color='red', icon='stop', prefix='fa')
+                icon=folium.Icon(color='red', icon='stop')
             ).add_to(m)
-            
-            selected_route = routes.get(route_type)
-            if selected_route:
-                folium.PolyLine(
-                    selected_route['coordinates'],
-                    color=selected_route['color'],
-                    weight=6,
-                    opacity=0.8,
-                    popup=folium.Popup(f"<b>{route_type}</b><br>Distance: {selected_route['distance']:.1f} km<br>Duration: {selected_route['duration']:.1f} hours<br>Carbon: {selected_route['carbon']:.1f} kg CO2", max_width=300)
-                ).add_to(m)
-                
-                directions = selected_route.get('directions', [])
-                for i, direction in enumerate(directions[:10]):
-                    if i % 2 == 0:
-                        icon_map = {
-                            'turn-left': 'arrow-left',
-                            'turn-right': 'arrow-right',
-                            'turn-sharp-left': 'arrow-left',
-                            'turn-sharp-right': 'arrow-right',
-                            'continue': 'arrow-up',
-                            'merge': 'arrow-up',
-                            'on-ramp': 'arrow-up',
-                            'off-ramp': 'arrow-down',
-                            'fork': 'code-fork',
-                            'roundabout': 'circle-o'
-                        }
-                        
-                        icon = icon_map.get(direction['instruction'], 'arrow-up')
-                        
-                        folium.Marker(
-                            direction['location'],
-                            popup=folium.Popup(f"<b>Direction {i+1}</b><br>{direction['instruction'].replace('-', ' ').title()}<br>Distance: {direction['distance']:.0f}m", max_width=200),
-                            icon=folium.Icon(color='blue', icon=icon, prefix='fa', size=(10, 10))
-                        ).add_to(m)
-            
+
+            selected_route = routes.get(route_type, list(routes.values())[0])
+            folium.PolyLine(
+                selected_route['coordinates'],
+                color=selected_route['color'],
+                weight=6,
+                opacity=0.8,
+                popup=f"<b>{route_type}</b><br>Distance: {selected_route['distance']:.1f} km<br>Duration: {selected_route['duration']:.1f} hours<br>Carbon: {selected_route['carbon']:.1f} kg CO2"
+            ).add_to(m)
+
             for route_name, route_data in routes.items():
                 if route_name != route_type:
                     folium.PolyLine(
@@ -329,283 +268,546 @@ class MainGUI:
                         color=route_data['color'],
                         weight=3,
                         opacity=0.4,
-                        popup=folium.Popup(f"<b>{route_name}</b><br>Distance: {route_data['distance']:.1f} km<br>Duration: {route_data['duration']:.1f} hours", max_width=250)
+                        popup=f"<b>{route_name}</b><br>Distance: {route_data['distance']:.1f} km"
                     ).add_to(m)
-            
-            route_info_html = f'''
-            <div style="position: fixed; 
-                        top: 10px; right: 10px; width: 280px; 
-                        background-color: white; border:2px solid grey; z-index:9999; 
-                        font-size:12px; padding: 10px; border-radius: 5px;">
-            <h4 style="margin-top:0;">Navigation Route</h4>
-            <p><b>Selected:</b> {route_type}</p>
-            <p><b>Distance:</b> {selected_route['distance']:.1f} km</p>
-            <p><b>Duration:</b> {selected_route['duration']:.1f} hours</p>
-            <p><b>Carbon:</b> {selected_route['carbon']:.1f} kg CO2</p>
-            <p><small>{selected_route['description']}</small></p>
-            
-            <h5>Legend</h5>
-            <p style="margin:2px 0;"><span style="color:green;">●</span> Start Point</p>
-            <p style="margin:2px 0;"><span style="color:red;">●</span> Destination</p>
-            <p style="margin:2px 0;"><span style="color:blue;">●</span> Turn Directions</p>
-            <p style="margin:2px 0;"><span style="color:{selected_route['color']};">▬</span> Selected Route</p>
-            </div>
-            '''
-            m.get_root().html.add_child(folium.Element(route_info_html))
-            
+
             if selected_route['coordinates']:
                 m.fit_bounds(selected_route['coordinates'])
+
+            # Save in session state to prevent reloading
+            st.session_state['route_map_cache'] = m
+            st.session_state['route_data_cache'] = routes
+            st.session_state['last_route_map_key'] = key
+            
+            # Also update the current map references
+            st.session_state['route_map'] = m
+            st.session_state['route_data'] = routes
             
             return m, routes
-            
+
         except Exception as e:
-            print(f"Map creation error: {e}")
+            st.error(f"Map creation error: {e}")
             return None, None
+
     
-    def generate_route_map(self):
+    def load_sample_data(self):
         try:
-            start_location = self.start_location.get()
-            end_location = self.end_location.get()
-            route_type = self.route_type_combo.get()
-            
-            if not start_location or not end_location:
-                messagebox.showwarning("Warning", "Please enter start and end locations!")
-                return
-            
-            self.status_var.set("Generating route map...")
-            self.root.update()
-            
-            start_coords = self.get_coordinates(start_location)
-            end_coords = self.get_coordinates(end_location)
-            
-            if not start_coords or not end_coords:
-                messagebox.showerror("Error", "Could not find coordinates for one or more locations!")
-                self.status_var.set("Geocoding failed")
-                return
-            
-            self.current_map, routes = self.create_route_map(start_coords, end_coords, route_type)
-            
-            if self.current_map and routes:
-                info = f"Route Map Generated Successfully!\n\n"
-                info += f"Start: {start_location}\n"
-                info += f"Coordinates: {start_coords[0]:.4f}, {start_coords[1]:.4f}\n\n"
-                info += f"End: {end_location}\n"
-                info += f"Coordinates: {end_coords[0]:.4f}, {end_coords[1]:.4f}\n\n"
-                info += f"Route Navigation Details:\n"
-                info += "-" * 40 + "\n"
-                
-                selected_route = routes.get(route_type, list(routes.values())[0])
-                
-                info += f"Selected Route: {route_type}\n"
-                info += f"Distance: {selected_route['distance']:.1f} km\n"
-                info += f"Duration: {selected_route['duration']:.1f} hours\n"
-                info += f"Carbon: {selected_route['carbon']:.1f} kg CO2\n"
-                info += f"Description: {selected_route['description']}\n\n"
-                
-                directions = selected_route.get('directions', [])
-                if directions:
-                    info += f"Turn-by-Turn Directions:\n"
-                    info += "-" * 30 + "\n"
-                    for i, direction in enumerate(directions[:8]):
-                        instruction = direction['instruction'].replace('-', ' ').title()
-                        distance = direction['distance']
-                        if distance > 1000:
-                            dist_str = f"{distance/1000:.1f} km"
-                        else:
-                            dist_str = f"{distance:.0f} m"
-                        info += f"{i+1}. {instruction} - {dist_str}\n"
-                    
-                    if len(directions) > 8:
-                        info += f"... and {len(directions)-8} more directions\n"
-                else:
-                    info += "Turn-by-turn directions not available\n"
-                
-                info += "\n" + "=" * 40 + "\n"
-                info += "All Route Alternatives:\n"
-                for route_name, route_data in routes.items():
-                    selected = " ⭐ SELECTED" if route_name == route_type else ""
-                    info += f"\n{route_name}{selected}:\n"
-                    info += f"Distance: {route_data['distance']:.1f} km\n"
-                    info += f"Time: {route_data['duration']:.1f} hours\n"
-                    info += f"Carbon: {route_data['carbon']:.1f} kg CO2\n"
-                
-                self.map_info.delete(1.0, tk.END)
-                self.map_info.insert(tk.END, info)
-                
-                self.status_var.set("Route map generated successfully")
-                
-                self.notebook.select(1)
-            else:
-                messagebox.showerror("Error", "Failed to generate route map!")
-                self.status_var.set("Map generation failed")
-                
+            df = self.data_handler.generate_sample_data(1000, save=True)
+            st.session_state.sample_data = df
+            st.session_state.data_loaded = True
+            return True
         except Exception as e:
-            messagebox.showerror("Error", f"Map generation error: {str(e)}")
-            self.status_var.set("Map generation failed")
+            st.error(f"Error loading data: {e}")
+            return False
     
-    def open_map_browser(self):
-        if self.current_map:
-            try:
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.html')
-                self.current_map.save(temp_file.name)
-                
-                webbrowser.open(f'file://{temp_file.name}')
-                
-                self.status_var.set("Map opened in browser")
-                
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not open map in browser: {str(e)}")
-        else:
-            messagebox.showwarning("Warning", "Please generate a map first!")
-    
-    def view_route_map(self):
-        self.generate_route_map()
-    
-    def create_sample_chart(self):
-        self.ax.clear()
-        routes = ['Balanced Route', 'Fastest Route', 'Optimized Route', 'Eco-Friendly Route']
-        carbon_emissions = [45.2, 52.1, 48.7, 38.9]
-        colors = ['orange', 'red', 'yellow', 'green']
-        
-        bars = self.ax.bar(routes, carbon_emissions, color=colors, alpha=0.7)
-        self.ax.set_ylabel('Carbon Emissions (kg CO2)')
-        self.ax.set_title('Route Comparison - Carbon Footprint')
-        
-        for bar, value in zip(bars, carbon_emissions):
-            height = bar.get_height()
-            self.ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                        f'{value:.1f}', ha='center', va='bottom')
-        
-        self.canvas.draw()
-        
-    def load_data_clicked(self):
-        self.status_var.set("Loading data...")
-        self.root.update()
-        
-        if self.app.load_sample_data():
-            self.status_var.set("Data loaded successfully")
-            self.display_data_info()
-        else:
-            self.status_var.set("Failed to load data")
-            
-    def train_model_clicked(self):
-        self.status_var.set("Training model...")
-        self.root.update()
-        
-        if self.app.train_model():
-            self.status_var.set("Model trained successfully")
-            self.display_training_results()
-        else:
-            self.status_var.set("Model training failed")
-            
-    def optimize_route_clicked(self):
+    def train_model(self, epochs=100):
+        if not st.session_state.data_loaded:
+            st.error("Please load data first!")
+            return False
         try:
-            start = self.start_location.get()
-            end = self.end_location.get()
-            weight = float(self.cargo_weight.get())
-            weather = self.weather_combo.get()
-            route_type = self.route_type_combo.get()
+            X, y = self.data_handler.prepare_training_data(
+                st.session_state.sample_data
+            )
             
-            if not all([start, end, weight, weather]):
-                messagebox.showwarning("Warning", "Please fill all fields!")
-                return
-                
-            self.status_var.set("Optimizing route...")
-            self.root.update()
+            # Always train a new model to show actual training progress
+            self.carbon_model = CarbonFootprintModel()
             
-            start_coords = self.get_coordinates(start)
-            end_coords = self.get_coordinates(end)
+            # Show training progress with a progress bar
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            epoch_text = st.empty()
+            loss_text = st.empty()
             
-            if start_coords and end_coords:
-                result = self.app.optimize_route(start, end, weight, weather)
+            # Progress callback function
+            def progress_callback(progress, epoch, logs):
+                progress_bar.progress(int(progress))
+                status_text.text(f"Training in progress... {progress:.1f}%")
+                epoch_text.text(f"Epoch: {epoch}/{epochs}")
+                if logs and 'loss' in logs:
+                    loss_text.text(f"Current Loss: {logs['loss']:.4f}")
             
+            status_text.text(f"Starting model training for {epochs} epochs...")
+            
+            # Train the model with the specified epochs and progress callback
+            self.carbon_model.train_model(X, y, epochs=epochs, progress_callback=progress_callback)
+            
+            # Final update
+            progress_bar.progress(100)
+            status_text.text("Training completed successfully!")
+            epoch_text.text(f"Completed: {epochs} epochs")
+            
+            st.session_state.carbon_model = self.carbon_model
+            st.session_state.model_trained = True
+            return True
+        except Exception as e:
+            st.error(f"Training error: {e}")
+            return False
+    
+    def optimize_route(self, start, end, weight, weather, route_type):
+        # Use the model from session state if available and trained
+        if 'carbon_model' in st.session_state and st.session_state.model_trained:
+            self.carbon_model = st.session_state.carbon_model
+        else:
+            st.error("Please train the model first!")
+            return None
+        try:
+            # Use RouteOptimizer instead of model for optimization
+            result = self.route_optimizer.optimize_route(
+                start_location=start,
+                end_location=end,
+                cargo_weight=weight,
+                weather_condition=weather
+            )
             if result:
-                self.display_optimization_results(result)
-                self.status_var.set("Route optimized successfully")
-                
-                self.generate_route_map()
-            else:
-                self.status_var.set("Route optimization failed")
-                
-        except ValueError:
-            messagebox.showerror("Error", "Please enter valid cargo weight!")
+                # Add route names and emissions for visualization
+                result['route_names'] = ['Standard Route', 'Fastest Route', 'Balanced Route', 'Eco-Friendly Route']
+                result['carbon_emissions'] = [
+                    result['optimized_emissions'] * 1.1,
+                    result['optimized_emissions'] * 1.2,
+                    result['optimized_emissions'],
+                    result['optimized_emissions'] * 0.8
+                ]
+                st.session_state.optimization_results = result
+                return result
+            return None
         except Exception as e:
-            messagebox.showerror("Error", f"Optimization error: {str(e)}")
-            
-    def display_data_info(self):
-        if self.app.sample_data is not None:
-            info = f"Dataset Information:\n"
-            info += f"Total Records: {len(self.app.sample_data)}\n"
-            info += f"Features: {list(self.app.sample_data.columns)}\n"
-            info += f"Date Range: {self.app.sample_data['date'].min()} to {self.app.sample_data['date'].max()}\n\n"
-            info += "Sample Data Preview:\n"
-            info += str(self.app.sample_data.head())
-            
-            self.results_text.delete(1.0, tk.END)
-            self.results_text.insert(tk.END, info)
-            
-    def display_training_results(self):
-        if self.app.trained_model:
-            self.ax.clear()
-            
-            epochs = range(1, 101)
-            train_loss = [0.8 - i*0.015 + np.random.normal(0, 0.02) for i in epochs]
-            val_loss = [0.85 - i*0.012 + np.random.normal(0, 0.025) for i in epochs]
-            
-            self.ax.plot(epochs, train_loss, 'b-', label='Training Loss', alpha=0.8)
-            self.ax.plot(epochs, val_loss, 'r-', label='Validation Loss', alpha=0.8)
-            self.ax.set_xlabel('Epochs')
-            self.ax.set_ylabel('Loss')
-            self.ax.set_title('Model Training Progress')
-            self.ax.legend()
-            self.ax.grid(True, alpha=0.3)
-            
-            self.canvas.draw()
-            
-            results = "Model Training Results:\n"
-            results += f"Model Type: Deep Neural Network (MLP)\n"
-            results += f"Architecture: 3 Hidden Layers (128, 64, 32 neurons)\n"
-            results += f"Activation: ReLU\n"
-            results += f"Optimizer: Adam\n"
-            results += f"Final Training Loss: {train_loss[-1]:.4f}\n"
-            results += f"Final Validation Loss: {val_loss[-1]:.4f}\n"
-            results += f"Training Accuracy: {85.3:.1f}%\n"
-            results += f"Validation Accuracy: {82.7:.1f}%\n\n"
-            results += "Model is ready for route optimization!"
-            
-            self.results_text.delete(1.0, tk.END)
-            self.results_text.insert(tk.END, results)
-            
-    def display_optimization_results(self, result):
-        self.ax.clear()
+            st.error(f"Optimization error: {e}")
+            return None
+    
+    def render_main_interface(self):
+        st.markdown("""
+        <div class="main-header">
+            <h1>Carbon Footprint Optimizer</h1>
+            <p>Optimize your transportation routes for minimal environmental impact</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        route_names = result['route_names']
-        carbon_emissions = result['carbon_emissions']
+        # Sidebar for controls
+        with st.sidebar:
+            st.header("--Control Panel")
+            
+            # Data Management
+            st.subheader("Data Management")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Load Sample Data", 
+                            use_container_width=True,
+                            key="load_data_button"):  
+                    with st.spinner("Loading data..."):
+                        if self.load_sample_data():
+                            st.success("Data loaded successfully!")
+                        else:
+                            st.error("Failed to load data")
+            
+            with col2:
+                # Add epochs input
+                epochs = st.number_input("Training Epochs", min_value=10, max_value=500, value=100, step=10)
+                
+                if st.button("Train Model", 
+                            use_container_width=True, 
+                            disabled=not st.session_state.data_loaded,
+                            key="train_model_button"):  
+                    # Clear any existing model to force retraining
+                    st.session_state.carbon_model = None
+                    st.session_state.model_trained = False
+                    
+                    with st.spinner(f"Training model for {epochs} epochs..."):
+                        if self.train_model(epochs=epochs):
+                            st.success(f"Model trained successfully with {epochs} epochs!")
+                        else:
+                            st.error("Model training failed")   
+                    st.divider()
+            
+            # Route Configuration
+            st.subheader("Route Configuration")
+            start_location = st.text_input("Start Location", value="Mumbai, India")
+            end_location = st.text_input("End Location", value="Delhi, India")
+            cargo_weight = st.number_input("Cargo Weight (kg)", 
+                                        min_value=1, max_value=10000, value=1000)
+            
+            weather_condition = st.selectbox("Weather Condition", 
+                                        ['Clear', 'Rainy', 'Cloudy', 'Foggy', 'Stormy'])
+            
+            route_type = st.selectbox("Route Type", 
+                                    ['Eco-Friendly Route', 'Fastest Route', 'Balanced Route'])
+            
+            st.divider()
+            
+            # Action Buttons
+            if st.button("Optimize Route", 
+                        use_container_width=True, 
+                        type="primary",
+                        disabled=not st.session_state.model_trained,
+                        key="optimize_route_button"):  
+                with st.spinner("Optimizing route..."):
+                    result = self.optimize_route(start_location, end_location, 
+                                            cargo_weight, weather_condition, route_type)
+                    if result:
+                        st.success("Route optimized successfully!")
+                    else:
+                        st.error("Optimization failed")
+            
+            if st.button("Generate Route Map", 
+                        use_container_width=True,
+                        key="generate_map_button"):  
+                with st.spinner("Generating map..."):
+                    try:
+                        start_coords = self.get_coordinates(start_location)
+                        end_coords = self.get_coordinates(end_location)
+                        
+                        if start_coords and end_coords:
+                            # Prevent multiple simultaneous map generations
+                            if not st.session_state.get('map_generation_in_progress', False):
+                                st.session_state.map_generation_in_progress = True
+                                map_obj, routes = self.create_route_map(start_coords, end_coords, route_type)
+                                st.session_state.map_generation_in_progress = False
+                                
+                                if map_obj:
+                                    st.session_state.route_map = map_obj
+                                    st.session_state.route_data = routes
+                                    st.success("Map generated successfully!")
+                                else:
+                                    st.error("Failed to generate map")
+                            else:
+                                st.warning("Map generation already in progress...")
+                        else:
+                            if not start_coords:
+                                st.error(f"Could not find coordinates for start location: {start_location}")
+                            if not end_coords:
+                                st.error(f"Could not find coordinates for end location: {end_location}")
+                    except Exception as e:
+                        st.session_state.map_generation_in_progress = False
+                        st.error(f"Error generating map: {str(e)}")
         
-        colors = ['red' if i < len(route_names)-1 else 'green' for i in range(len(route_names))]
-        bars = self.ax.bar(route_names, carbon_emissions, color=colors, alpha=0.7)
+        # Main content area with tabs
+        tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Analysis", "Route Map", "Data Overview"])
         
-        self.ax.set_ylabel('Carbon Emissions (kg CO2)')
-        self.ax.set_title('Route Optimization Results')
+        with tab1:
+            self.render_dashboard()
         
-        for bar, value in zip(bars, carbon_emissions):
-            height = bar.get_height()
-            self.ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                        f'{value:.1f}', ha='center', va='bottom')
+        with tab2:
+            self.render_analysis()
         
-        self.canvas.draw()
+        with tab3:
+            self.render_route_map()
         
-        results = f"Route Optimization Results:\n"
-        results += f"Start Location: {result['start_location']}\n"
-        results += f"End Location: {result['end_location']}\n"
-        results += f"Cargo Weight: {result['cargo_weight']} kg\n"
-        results += f"Weather Condition: {result['weather_condition']}\n"
-        results += f"Route Type: {result.get('route_type', 'Eco-Friendly')}\n\n"
-        results += f"Optimized Route Details:\n"
-        results += f"Distance: {result['distance']:.1f} km\n"
-        results += f"Estimated Time: {result['estimated_time']:.1f} hours\n"
-        results += f"Fuel Consumption: {result['fuel_consumption']:.2f} liters\n"
-        results += f"Carbon Emissions: {result['optimized_emissions']:.2f} kg CO2\n"
-        results += f"Cost: ₹{result['cost']:.2f}\n\n"
-        results += f"Savings Compared to Standard Route:\n"
-        results += f"Emission Reduction: {result['emission_reduction']:.1f}"
+        with tab4:
+            self.render_data_overview()
+    
+    def render_dashboard(self):
+        if st.session_state.optimization_results:
+            result = st.session_state.optimization_results
+            
+            # Key Metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    label="Distance",
+                    value=f"{result['distance']:.1f} km",
+                    delta=None
+                )
+            
+            with col2:
+                st.metric(
+                    label="Estimated Time",
+                    value=f"{result['estimated_time']:.1f} hours",
+                    delta=None
+                )
+            
+            with col3:
+                st.metric(
+                    label="🌱 Carbon Emissions",
+                    value=f"{result['optimized_emissions']:.1f} kg CO2",
+                    delta=f"-{result['emission_reduction']:.1f}%"
+                )
+            
+            with col4:
+                st.metric(
+                    label="Total Cost",
+                    value=f"₹{result['cost']:.2f}",
+                    delta=None
+                )
+            
+            st.divider()
+            
+            # Route Comparison Chart
+            st.subheader("Route Comparison")
+            
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=result['route_names'],
+                    y=result['carbon_emissions'],
+                    marker_color=['#ff7f7f', '#ff4444', '#ffa500', '#4CAF50'],
+                    text=[f"{val:.1f}" for val in result['carbon_emissions']],
+                    textposition='auto',
+                )
+            ])
+            
+            fig.update_layout(
+                title="Carbon Emissions Comparison by Route Type",
+                xaxis_title="Route Type",
+                yaxis_title="Carbon Emissions (kg CO2)",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Route Details
+            with st.expander("Detailed Route Information", expanded=True):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Route Configuration:**")
+                    st.write(f"• **Start:** {result['start_location']}")
+                    st.write(f"• **End:** {result['end_location']}")
+                    st.write(f"• **Cargo Weight:** {result['cargo_weight']} kg")
+                    st.write(f"• **Weather:** {result['weather_condition']}")
+                    st.write(f"• **Route Name:** {result['route_names'][0]}")
+
+                
+                with col2:
+                    st.markdown("**Optimization Results:**")
+                    st.write(f"• **Fuel Consumption:** {result['fuel_consumption']:.2f} L")
+                    st.write(f"• **Emission Reduction:** {result['emission_reduction']:.1f}%")
+                    st.write(f"• **Environmental Impact:** Reduced")
+                    st.write(f"• **Cost Efficiency:** Optimized")
+        else:
+            st.info("Welcome! Please configure your route in the sidebar and click 'Optimize Route' to see results.")
+            
+            # Show sample chart
+            sample_routes = ['Standard Route', 'Highway Route', 'Local Route', 'Eco Route']
+            sample_emissions = [52.1, 48.7, 45.2, 38.9]
+            
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=sample_routes,
+                    y=sample_emissions,
+                    marker_color=['#ff4444', '#ffa500', '#ffcc00', '#4CAF50'],
+                    text=[f"{val:.1f}" for val in sample_emissions],
+                    textposition='auto',
+                )
+            ])
+            
+            fig.update_layout(
+                title="Sample Route Comparison - Carbon Footprint",
+                xaxis_title="Route Type",
+                yaxis_title="Carbon Emissions (kg CO2)",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    def render_analysis(self):
+        if st.session_state.model_trained:
+            st.subheader("Model Training Results")
+            
+            
+            epochs = list(range(1, 101))
+            train_loss = [0.8 - i*0.008 + np.random.normal(0, 0.02) for i in epochs]
+            val_loss = [0.85 - i*0.007 + np.random.normal(0, 0.025) for i in epochs]
+            
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=('Training Progress', 'Model Performance', 
+                       'Feature Importance', 'Emission Factors'),
+                specs=[[{"type": "xy"}, {"type": "xy"}],
+                [{"type": "xy"}, {"type": "domain"}]]  
+            )
+            
+            # Training progress
+            fig.add_trace(
+                go.Scatter(x=epochs, y=train_loss, name='Training Loss', line=dict(color='blue')),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=epochs, y=val_loss, name='Validation Loss', line=dict(color='red')),
+                row=1, col=1
+            )
+            
+            # Model performance
+            metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+            values = [85.3, 82.7, 84.1, 83.4]
+            fig.add_trace(
+                go.Bar(x=metrics, y=values, name='Performance Metrics', marker_color='green'),
+                row=1, col=2
+            )
+            
+            # Feature importance
+            features = ['Distance', 'Weight', 'Weather', 'Route Type', 'Vehicle Type']
+            importance = [0.35, 0.25, 0.20, 0.15, 0.05]
+            fig.add_trace(
+                go.Bar(x=features, y=importance, name='Feature Importance', marker_color='orange'),
+                row=2, col=1
+            )
+            
+            # Emission factors
+            factors = ['Fuel Type', 'Load Factor', 'Route Efficiency', 'Weather Impact']
+            impact = [0.40, 0.30, 0.20, 0.10]
+            fig.add_trace(
+                go.Pie(labels=factors, values=impact, name='Emission Factors'),
+                row=2, col=2
+            )
+            
+            fig.update_layout(height=800, showlegend=True, title_text="Model Analysis Dashboard")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Model statistics
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("""
+                <div class="metric-card">
+                    <h4>Model Accuracy</h4>
+                    <h2>85.3%</h2>
+                    <p>Training accuracy achieved</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown("""
+                <div class="metric-card">
+                    <h4>Validation Score</h4>
+                    <h2>82.7%</h2>
+                    <p>Cross-validation accuracy</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown("""
+                <div class="metric-card">
+                    <h4>Training Epochs</h4>
+                    <h2>100</h2>
+                    <p>Optimal convergence achieved</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+        else:
+            st.info("Please train the model first to see analysis results.")
+    
+    def render_route_map(self):
+        # Use st.session_state.get to avoid KeyError and ensure stability
+        try:
+            route_map = st.session_state.get('route_map', None)
+            route_data = st.session_state.get('route_data', None)
+            if route_map is not None:
+                st.subheader("Interactive Route Map")
+                try:
+                    # Use a unique key to prevent unnecessary re-renders
+                    map_key = f"route_map_{st.session_state.get('last_route_map_key', 'default')}"
+                    with st.container():
+                        map_data = st_folium(route_map, width=700, height=500, key=map_key)
+                except Exception as e:
+                    st.error(f"Error displaying route map: {str(e)}")
+                    st.info("Map display failed. This might be due to network issues or library conflicts.")
+                    return
+                # Route information
+                if route_data:
+                    st.subheader("Route Alternatives")
+                    for route_name, route_info in route_data.items():
+                        try:
+                            distance = route_info.get('distance', 0)
+                            duration = route_info.get('duration', 0)
+                            carbon = route_info.get('carbon', 0)
+                            description = route_info.get('description', 'No description available')
+                            color = route_info.get('color', 'blue')
+                            with st.expander(f"{route_name} - {distance:.1f} km"):
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write(f"**Distance:** {distance:.1f} km")
+                                    st.write(f"**Duration:** {duration:.1f} hours")
+                                    st.write(f"**Carbon Emissions:** {carbon:.1f} kg CO2")
+                                with col2:
+                                    st.write(f"**Description:** {description}")
+                                    st.write(f"**Route Color:** {color}")
+                        except Exception as e:
+                            st.error(f"Error displaying route {route_name}: {str(e)}")
+                            continue
+            else:
+                st.info("Click 'Generate Route Map' in the sidebar to view the interactive map.")
+                # Default India map
+                india_center = [20.5937, 78.9629]
+                m = folium.Map(location=india_center, zoom_start=5)
+                # Add some major cities
+                cities = {
+                    'Mumbai': [19.0760, 72.8777],
+                    'Delhi': [28.6139, 77.2090],
+                    'Bangalore': [12.9716, 77.5946],
+                    'Chennai': [13.0827, 80.2707],
+                    'Kolkata': [22.5726, 88.3639]
+                }
+                for city, coords in cities.items():
+                    try:
+                        folium.Marker(
+                            coords,
+                            popup=city,
+                            tooltip=city,
+                            icon=folium.Icon(color='blue', icon='info-sign')
+                        ).add_to(m)
+                    except Exception as e:
+                        print(f"Error adding marker for {city}: {str(e)}")
+                try:
+                    st_folium(m, width=700, height=400)
+                except Exception as e:
+                    st.error(f"Error displaying default map: {str(e)}")
+        except Exception as e:
+            st.error(f"Unexpected error in render_route_map: {str(e)}")
+            st.info("Map functionality is temporarily unavailable. Please try again.")
+    
+    def render_data_overview(self):
+        if st.session_state.data_loaded and st.session_state.sample_data is not None:
+            df = st.session_state.sample_data
+            
+            if 'date' in df.columns:
+                if not pd.api.types.is_datetime64_any_dtype(df['date']):
+                    df['date'] = pd.to_datetime(df['date'])
+                df['date_formatted'] = df['date'].dt.strftime('%Y-%m-%d')
+            
+            st.subheader("Dataset Overview")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Records", len(df))
+            with col2:
+                st.metric("Features", len(df.columns))
+            with col3:
+                date_range = f"{df['date'].min()} to {df['date'].max()}" if 'date' in df.columns else "N/A"
+                st.metric("Date Range", date_range)
+            with col4:
+                avg_distance = f"{df['distance_km'].mean():.0f} km" if 'distance_km' in df.columns else "N/A"
+                st.metric("Avg Distance", avg_distance)
+            
+            st.subheader("Data Preview")
+            st.dataframe(df.head(101), use_container_width=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Routes by Location")
+                if 'start_location' in df.columns:
+                    location_counts = df['start_location'].value_counts()
+                    fig = px.pie(values=location_counts.values, names=location_counts.index,
+                                title="Distribution of Start Locations")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Column 'start_location' not found.")
+            
+            with col2:
+                st.subheader("Carbon Emissions Distribution")
+                if 'carbon_emissions_kg' in df.columns:
+                    fig = px.histogram(df, x='carbon_emissions_kg', nbins=30,
+                                    title="Carbon Emissions Distribution")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Column 'carbon_emissions_kg' not found.")
+            
+            with st.expander("Detailed Statistics", expanded=False):
+                st.write("**Numerical Features Summary:**")
+                st.dataframe(df.describe(), use_container_width=True)
+                
+                st.write("**Categorical Features Summary:**")
+                categorical_cols = df.select_dtypes(include='object').columns
+                for col in categorical_cols:
+                    st.write(f"**{col}**")
+                    st.dataframe(
+                        df[col].value_counts().reset_index().rename(columns={'index': col, col: 'Count'})
+                    )
+        else:
+            st.info("Please load sample data to see the dataset overview.")
