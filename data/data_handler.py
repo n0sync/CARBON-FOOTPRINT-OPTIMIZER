@@ -8,17 +8,16 @@ from datetime import datetime, timedelta
 import random
 
 class DataHandler:
-    
     def __init__(self):
         self.label_encoders = {}
         self.onehot_encoders = {}
         self.scaler = StandardScaler()
         self.feature_columns = []
         
-    def generate_sample_data(self, num_records=1000):
+    def generate_sample_data(self, num_records=1000, save=True):
         np.random.seed(42)
         random.seed(42)
-        
+
         cities = {
             'Mumbai': (19.0760, 72.8777),
             'Delhi': (28.7041, 77.1025),
@@ -31,45 +30,46 @@ class DataHandler:
             'Jaipur': (26.9124, 75.7873),
             'Lucknow': (26.8467, 80.9462)
         }
-        
+
         data = []
         start_date = datetime(2024, 1, 1)
-        
+
         for i in range(num_records):
             start_city = random.choice(list(cities.keys()))
             end_city = random.choice([c for c in cities.keys() if c != start_city])
-            
+
             start_coords = cities[start_city]
             end_coords = cities[end_city]
-            distance = np.sqrt((start_coords[0] - end_coords[0])**2 + 
-                             (start_coords[1] - end_coords[1])**2) * 111
+            distance = np.sqrt((start_coords[0] - end_coords[0]) ** 2 +
+                            (start_coords[1] - end_coords[1]) ** 2) * 111
             distance = max(100, distance + np.random.normal(0, 50))
-            
+
             cargo_weight = np.random.uniform(500, 5000)
             vehicle_type = random.choice(['Truck', 'Van', 'Container'])
             weather = random.choice(['Clear', 'Rainy', 'Cloudy', 'Foggy', 'Stormy'])
             traffic_density = random.choice(['Low', 'Medium', 'High'])
             fuel_type = random.choice(['Diesel', 'Petrol', 'CNG', 'Electric'])
-            
-            base_fuel_rate = {'Truck': 4.5, 'Van': 8.0, 'Container': 3.2}[vehicle_type]
+
+            base_fuel = distance * 0.08 * (cargo_weight / 1000)
             weather_factor = {'Clear': 1.0, 'Rainy': 1.2, 'Cloudy': 1.05, 'Foggy': 1.15, 'Stormy': 1.3}[weather]
             traffic_factor = {'Low': 1.0, 'Medium': 1.15, 'High': 1.3}[traffic_density]
             weight_factor = 1 + (cargo_weight / 10000)
-            
-            fuel_consumption = (distance / base_fuel_rate) * weather_factor * traffic_factor * weight_factor
-            
-            fuel_emission_factor = {'Diesel': 2.68, 'Petrol': 2.31, 'CNG': 1.94, 'Electric': 0.5}[fuel_type]
-            carbon_emissions = fuel_consumption * fuel_emission_factor
-            
+
+            fuel_consumption = base_fuel * (1 + np.random.normal(0, 0.15))
+
+            emission_factor = {'Diesel': 2.68, 'Petrol': 2.31, 'CNG': 1.94, 'Electric': 0.5}[fuel_type]
+            carbon_emissions = fuel_consumption * emission_factor
             carbon_emissions += np.random.normal(0, carbon_emissions * 0.1)
             carbon_emissions = max(10, carbon_emissions)
-            
+
             date = start_date + timedelta(days=random.randint(0, 500))
-            
+
             record = {
-                'date': date.strftime('%Y-%m-%d'),
+                'date': date.strftime('%Y-%m-%d %H:%M:%S'),
                 'start_city': start_city,
                 'end_city': end_city,
+                'start_location': start_city,  
+                'end_location': end_city,      
                 'distance_km': round(distance, 2),
                 'cargo_weight_kg': round(cargo_weight, 2),
                 'vehicle_type': vehicle_type,
@@ -81,16 +81,17 @@ class DataHandler:
                 'delivery_time_hours': round(distance / random.uniform(40, 80), 2),
                 'cost_inr': round(distance * random.uniform(8, 15) + cargo_weight * 0.5, 2)
             }
-            
+
             data.append(record)
-        
+
         df = pd.DataFrame(data)
-        
-        os.makedirs('data', exist_ok=True)
-        df.to_csv('data/sample_logistics_data.csv', index=False)
-        
-        print(f"Generated {num_records} sample records and saved to data/sample_logistics_data.csv")
+
+        if save:
+            os.makedirs('data', exist_ok=True)
+            df.to_csv('data/sample_logistics_data.csv', index=False)
+
         return df
+
     
     def load_data(self, file_path):
         try:
