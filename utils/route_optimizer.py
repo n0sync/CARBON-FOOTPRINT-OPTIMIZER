@@ -99,9 +99,11 @@ class RouteOptimizer:
         base_route = self.get_distance_and_duration(start_location, end_location)
         
         if base_route:
-            for i in range(3):
+            route_types = ['Fastest Route', 'Eco-Friendly Route', 'Balanced Route']
+            
+            for i, route_name in enumerate(route_types):
                 route = {
-                    'name': f'Route {chr(65+i)}',
+                    'name': route_name,  # Use the predefined name
                     'distance_km': base_route['distance_km'] * random.uniform(0.9, 1.2),
                     'duration_hours': base_route['duration_hours'] * random.uniform(0.85, 1.25),
                     'traffic_level': random.choice(['Low', 'Medium', 'High']),
@@ -208,7 +210,8 @@ class RouteOptimizer:
                 'cost_savings': cost_savings,
                 'fuel_savings': fuel_savings,
                 'route_names': [r['route_name'] for r in route_analysis[:4]],
-                'carbon_emissions': [r['carbon_emissions_kg'] for r in route_analysis[:4]]
+                'carbon_emissions': [r['carbon_emissions_kg'] for r in route_analysis[:4]],
+                'route_type': best_route['route_name']
             }
             
             return result
