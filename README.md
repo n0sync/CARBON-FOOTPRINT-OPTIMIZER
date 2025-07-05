@@ -1,41 +1,78 @@
-# Carbon Footprint Optimizer - Supply Chain Logistics
+# Carbon Footprint Optimizer - Supply Chain Logistics 
 
-A simple desktop app to help optimize delivery routes and reduce carbon emissions in supply chain logistics.
+An AI-powered application that optimizes transportation routes for minimal environmental impact in supply chain logistics. Features a web-based dashboard built with Streamlit.
 
-## Features
 
-* Load sample logistics data (CSV)
-* Train a deep learning model on the data
-* Optimize routes based on cargo weight and weather
-* User-friendly GUI built with Tkinter
+## Features 
 
-## How to Run
+* **Interactive Web Dashboard** with visual analytics
+* **Route Optimization** based on carbon emissions, weather, and cargo
+* **Multiple Route Alternatives** comparison (Eco-Friendly, Fastest, Balanced)
+* **Deep Learning Model** for carbon footprint prediction
+* **Sample Data Generation** for immediate experimentation
+* **Interactive Maps** with Folium visualization
+* **Performance Metrics** tracking emission reductions
 
-1. Make sure Python is installed.
-2. Create and activate a virtual environment (optional but recommended).
-3. Install the required packages:
+## 🛠️ Tech Stack 
 
-```bash
-pip install -r requirements.txt
+- **Frontend**: Streamlit, Plotly, Folium
+- **Backend**: TensorFlow/Keras, Scikit-learn, Pandas
+- **Mapping**: OSRM, GeoPy
+- **Optimization**: Custom route optimization algorithms
+
+
+
+## Requirements
+- Python 3.8+
+- Internet connection
+
+## Setup Instructions
+
+1. **Navigate to project directory:**
+   ```bash
+   cd CARBON-FOOTPRINT-OPTIMIZER
+2. **Create and activate a virtual environment:**
+   ```bash
+   python -m venv .venv
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+4. **Run the Streamlit:**
+   ```bash
+   streamlit run main.py
+5. **Open the Browser:**
+   
+   Visit: [http://localhost:8501](http://localhost:8501)
+
+
+
+## Project Structure
+
+```
+CFO/
+├── main.py              # Main Streamlit application entry 
+├── requirements.txt         # Python dependencies
+├── gui/
+│   └── main_gui.py         # Streamlit interface
+├── models/
+│   └── carbon_model.py     # AI model 
+├── utils/
+│   └── route_optimizer.py  # Route optimization logic
+├── data/
+│   └── data_handler.py     # Data processing utilities
+└── README.md               
 ```
 
-4. Run the app:
+## Contributing
 
-```bash
-python main.py
-```
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
-## File Structure
+## License
 
-* `main.py`: Starts the GUI app
-* `data/`: Handles CSV and sample data
-* `models/`: Contains the training model
-* `utils/`: Route optimization code
-* `gui/`: GUI layout and event logic
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Notes
 
-* Make sure `data/sample_logistics_data.csv` is present or it will be generated
-
----
-Feel free to contribute or customize this app for your own logistics needs.
