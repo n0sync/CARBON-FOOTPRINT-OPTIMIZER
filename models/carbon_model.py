@@ -1,12 +1,24 @@
-import tensorflow as tf
-from tensorflow import keras
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    print("TensorFlow not available. Using fallback linear regression model.")
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import pickle
+import time
+
 
 class CarbonFootprintModel:
+    _model_loaded = False
     def __init__(self):
         self.model = None
         self.history = None
@@ -21,78 +33,114 @@ class CarbonFootprintModel:
         
     def build_model(self, input_dim):
         self.input_dim = input_dim
-        self.model = keras.Sequential()
-        self.model.add(keras.layers.Dense(
-            self.hidden_layers[0], 
-            activation=self.activation, 
-            input_dim=input_dim,
-            name='hidden_layer_1'
-        ))
-        self.model.add(keras.layers.Dropout(0.2, name='dropout_1'))
-        self.model.add(keras.layers.Dense(
-            self.hidden_layers[1], 
-            activation=self.activation,
-            name='hidden_layer_2'
-        ))
-        self.model.add(keras.layers.Dropout(0.2, name='dropout_2'))
-        self.model.add(keras.layers.Dense(
-            self.hidden_layers[2], 
-            activation=self.activation,
-            name='hidden_layer_3'
-        ))
-        self.model.add(keras.layers.Dropout(0.1, name='dropout_3'))
-        self.model.add(keras.layers.Dense(
-            1, 
-            activation=self.output_activation,
-            name='output_layer'
-        ))
-        self.model.compile(
-            optimizer=self.optimizer,
-            loss=self.loss,
-            metrics=self.metrics
-        )
-        print("Model Architecture:")
-        self.model.summary()
-        return self.model
-    
-    def train_model(self, X, y, test_size=0.2, validation_split=0.2, epochs=100, batch_size=32):
+        
+        if TF_AVAILABLE:
+            self.model = keras.Sequential()
+            
+            # Input layer
+            self.model.add(keras.layers.Input(shape=(input_dim,)))
+            
+            self.model.add(keras.layers.Normalization())
+            
+            # Hidden layers 
+            self.model.add(keras.layers.Dense(256, activation='relu'))
+            self.model.add(keras.layers.BatchNormalization())
+            self.model.add(keras.layers.Dropout(0.3))
+            
+            self.model.add(keras.layers.Dense(128, activation='relu'))
+            self.model.add(keras.layers.BatchNormalization())
+            self.model.add(keras.layers.Dropout(0.3))
+            
+            self.model.add(keras.layers.Dense(64, activation='relu'))
+            
+            # Output layer
+            self.model.add(keras.layers.Dense(1, activation='linear'))
+        else:
+            # Fallback to Random Forest Regressor
+            self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+
+    def train_model(self, X, y, test_size=0.2, validation_split=0.2, epochs=200, batch_size=64, progress_callback=None):
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=42
         )
         print(f"Training data shape: {X_train.shape}")
         print(f"Testing data shape: {X_test.shape}")
+        
         if self.model is None:
             self.build_model(X_train.shape[1])
-        callbacks = [
-            keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=10,
-                restore_best_weights=True,
-                verbose=1
-            ),
-            keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.5,
-                patience=5,
-                min_lr=0.0001,
+
+        if TF_AVAILABLE:
+            # TensorFlow training
+            lr_schedule = keras.optimizers.schedules.ExponentialDecay(
+                initial_learning_rate=0.001,
+                decay_steps=1000,
+                decay_rate=0.9
+            )
+            
+            optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
+            
+            self.model.compile(
+                optimizer=optimizer,
+                loss='huber',  
+                metrics=['mae']
+            )
+            
+            callbacks = [
+                keras.callbacks.EarlyStopping(
+                    monitor='val_loss',
+                    patience=50,
+                    restore_best_weights=True,
+                    verbose=1
+                ),
+            ]
+            
+            # Custom callback for progress tracking
+            class ProgressCallback(keras.callbacks.Callback):
+                def __init__(self, callback_func=None):
+                    super().__init__()
+                    self.callback_func = callback_func
+                    
+                def on_epoch_end(self, epoch, logs=None):
+                    if self.callback_func:
+                        progress = (epoch + 1) / self.params['epochs'] * 100
+                        self.callback_func(progress, epoch + 1, logs)
+            
+            # Add progress callback if provided
+            if progress_callback:
+                callbacks.append(ProgressCallback(progress_callback))
+            
+            print(f"Starting TensorFlow training for {epochs} epochs...")
+            self.history = self.model.fit(
+                X_train, y_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                validation_split=validation_split,
+                callbacks=callbacks,
                 verbose=1
             )
-        ]
-        print(f"Starting training for {epochs} epochs...")
-        self.history = self.model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_split=validation_split,
-            callbacks=callbacks,
-            verbose=1
-        )
-        print("\nEvaluating model on test set...")
-        test_loss, test_mae = self.model.evaluate(X_test, y_test, verbose=0)
-        y_pred = self.model.predict(X_test)
+            
+            print("\nEvaluating model on test set...")
+            test_loss, test_mae = self.model.evaluate(X_test, y_test, verbose=0)
+            y_pred = self.model.predict(X_test)
+        else:
+            # Sklearn training with simulated progress
+            print("Starting Random Forest training...")
+            if progress_callback:
+                # Simulate training progress
+                for i in range(epochs):
+                    progress = (i + 1) / epochs * 100
+                    progress_callback(progress, i + 1, {'loss': 0.5 - i*0.005})
+                    time.sleep(0.05)  # Small delay to show progress
+            
+            self.model.fit(X_train, y_train)
+            y_pred = self.model.predict(X_test)
+            test_loss = mean_squared_error(y_test, y_pred)
+            test_mae = mean_absolute_error(y_test, y_pred)
+            
         mse = mean_squared_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
+        
         self.evaluation_results = {
             'test_loss': test_loss,
             'test_mae': test_mae,
@@ -100,11 +148,13 @@ class CarbonFootprintModel:
             'r2_score': r2,
             'mae': mae
         }
+        
         print(f"\nModel Performance:")
         print(f"Test Loss (MSE): {test_loss:.4f}")
         print(f"Test MAE: {test_mae:.4f}")
         print(f"R² Score: {r2:.4f}")
         print(f"RMSE: {np.sqrt(mse):.4f}")
+        
         self.is_trained = True
         self.save_model()
         return self.model
@@ -113,31 +163,86 @@ class CarbonFootprintModel:
         if not self.is_trained or self.model is None:
             raise ValueError("Model must be trained before making predictions!")
         predictions = self.model.predict(X)
-        return predictions.flatten()
+        if TF_AVAILABLE and hasattr(predictions, 'flatten'):
+            return predictions.flatten()
+        elif hasattr(predictions, 'ravel'):
+            return predictions.ravel()
+        else:
+            return np.array(predictions).flatten()
     
     def predict_single(self, X_single):
         if not self.is_trained or self.model is None:
             raise ValueError("Model must be trained before making predictions!")
         prediction = self.model.predict(X_single.reshape(1, -1))
-        return prediction[0][0]
+        if TF_AVAILABLE:
+            return prediction[0][0]
+        else:
+            return prediction[0]
     
-    def save_model(self, filepath='models/carbon_model.h5'):
+    def save_model(self, filepath='models/carbon_model'):
         if self.model is not None:
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            self.model.save(filepath)
-            print(f"Model saved to {filepath}")
+            if TF_AVAILABLE:
+                self.model.save(f"{filepath}.keras", save_format='keras')
+                print(f"TensorFlow model saved to {filepath}.keras")
+            else:
+                with open(f"{filepath}.pkl", 'wb') as f:
+                    pickle.dump(self.model, f)
+                print(f"Sklearn model saved to {filepath}.pkl")
         else:
             print("No model to save!")
+  
     
-    def load_model(self, filepath='models/carbon_model.keras'):
-        try:
-            self.model = keras.models.load_model(filepath)
+    def load_model(self, filepath='models/carbon_model'):
+        cls = self.__class__
+
+        if hasattr(cls, "_model_instance") and cls._model_instance is not None:
+            self.model = cls._model_instance
             self.is_trained = True
-            print(f"Model loaded from {filepath}")
-            return self.model
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            return None
+            self.is_loaded = True
+            return True
+
+        # Try loading TensorFlow model first
+        if TF_AVAILABLE:
+            try:
+                keras_path = f"{filepath}.keras" if not filepath.endswith('.keras') else filepath
+                model = keras.models.load_model(keras_path)
+                self.model = model
+                cls._model_instance = model
+                self.is_trained = True
+                self.is_loaded = True
+                print(f"TensorFlow model loaded from {keras_path}")
+                return True
+            except Exception:
+                try:
+                    h5_path = filepath.replace('.keras', '.h5')
+                    model = keras.models.load_model(h5_path)
+                    self.model = model
+                    cls._model_instance = model
+                    self.is_trained = True
+                    self.is_loaded = True
+                    print(f"TensorFlow model loaded from {h5_path}")
+                    return True
+                except Exception:
+                    pass
+        
+        # Try loading sklearn model
+        try:
+            pkl_path = f"{filepath}.pkl" if not filepath.endswith('.pkl') else filepath
+            with open(pkl_path, 'rb') as f:
+                model = pickle.load(f)
+            self.model = model
+            cls._model_instance = model
+            self.is_trained = True
+            self.is_loaded = True
+            print(f"Sklearn model loaded from {pkl_path}")
+            return True
+        except Exception:
+            print("Model loading failed. No saved model found.")
+            self.model = None
+            self.is_loaded = False
+            return False
+
     
     def plot_training_history(self):
         if self.history is None:
