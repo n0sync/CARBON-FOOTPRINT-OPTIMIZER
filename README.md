@@ -13,7 +13,7 @@ An AI-powered application that optimizes transportation routes for minimal envir
 * **Interactive Maps** with Folium visualization
 * **Performance Metrics** tracking emission reductions
 
-## 🛠️ Tech Stack 
+## Tech Stack 
 
 - **Frontend**: Streamlit, Plotly, Folium
 - **Backend**: TensorFlow/Keras, Scikit-learn, Pandas
