@@ -3,12 +3,16 @@ import pandas as pd
 import random
 from datetime import datetime
 import math
+from geopy.geocoders import Photon
+
 
 class RouteOptimizer:
     
     def __init__(self, api_key=None):
         self.api_key = api_key or "DEMO_API_KEY"
         self.base_url = "https://maps.googleapis.com/maps/api"
+        
+        self.geolocator = Photon(user_agent="carbon_footprint_optimizer")
         
         self.vehicle_efficiency = {
             'Truck': 4.5,
@@ -37,7 +41,18 @@ class RouteOptimizer:
             'High': 1.3
         }
         
+        # Extended city coordinates with more Indian cities
         self.city_coordinates = {
+            'Mumbai, India': {'lat': 19.0760, 'lng': 72.8777},
+            'Delhi, India': {'lat': 28.7041, 'lng': 77.1025},
+            'Bangalore, India': {'lat': 12.9716, 'lng': 77.5946},
+            'Chennai, India': {'lat': 13.0827, 'lng': 80.2707},
+            'Kolkata, India': {'lat': 22.5726, 'lng': 88.3639},
+            'Hyderabad, India': {'lat': 17.3850, 'lng': 78.4867},
+            'Pune, India': {'lat': 18.5204, 'lng': 73.8567},
+            'Ahmedabad, India': {'lat': 23.0225, 'lng': 72.5714},
+            'Jaipur, India': {'lat': 26.9124, 'lng': 75.7873},
+            'Lucknow, India': {'lat': 26.8467, 'lng': 80.9462},
             'Mumbai': {'lat': 19.0760, 'lng': 72.8777},
             'Delhi': {'lat': 28.7041, 'lng': 77.1025},
             'Bangalore': {'lat': 12.9716, 'lng': 77.5946},
@@ -50,34 +65,84 @@ class RouteOptimizer:
             'Lucknow': {'lat': 26.8467, 'lng': 80.9462}
         }
     
+    def get_coordinates(self, location):
+        """Get coordinates for any location using geocoding"""
+        try:
+            # First check if it's in our cache
+            if location in self.city_coordinates:
+                coords = self.city_coordinates[location]
+                return (coords['lat'], coords['lng'])
+            
+            # Try geocoding
+            location_data = self.geolocator.geocode(location)
+            if location_data:
+                coords = (location_data.latitude, location_data.longitude)
+                # Cache for future use
+                self.city_coordinates[location] = {'lat': coords[0], 'lng': coords[1]}
+                return coords
+            
+            return None
+        except Exception as e:
+            print(f"Geocoding error for {location}: {e}")
+            return None
+    
+    def get_route_from_osrm(self, start_coords, end_coords):
+        """Get actual route data from OSRM routing service"""
+        try:
+            import requests
+            url = f"http://router.project-osrm.org/route/v1/driving/{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}"
+            params = {
+                'overview': 'full',
+                'geometries': 'geojson',
+                'steps': 'true'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data['routes']:
+                    route = data['routes'][0]
+                    coordinates = route['geometry']['coordinates']
+                    route_coords = [[coord[1], coord[0]] for coord in coordinates]
+                    
+                    return {
+                        'coordinates': route_coords,
+                        'distance_km': route['distance'] / 1000,  # Convert to km
+                        'duration_hours': route['duration'] / 3600,  # Convert to hours
+                        'status': 'OSRM_OK'
+                    }
+            return None
+        except Exception as e:
+            print(f"OSRM routing error: {e}")
+            return None
+    
     def get_distance_and_duration(self, start_location, end_location):
         try:
-            if start_location in self.city_coordinates and end_location in self.city_coordinates:
-                start_coords = self.city_coordinates[start_location]
-                end_coords = self.city_coordinates[end_location]
-                
-                distance = self.calculate_haversine_distance(
-                    start_coords['lat'], start_coords['lng'],
-                    end_coords['lat'], end_coords['lng']
-                )
-                
-                duration = distance / 60.0
-                
-                return {
-                    'distance_km': distance,
-                    'duration_hours': duration,
-                    'status': 'OK'
-                }
-            else:
-                distance = random.uniform(200, 1500)
-                duration = distance / random.uniform(50, 70)
-                
-                return {
-                    'distance_km': distance,
-                    'duration_hours': duration,
-                    'status': 'ESTIMATED'
-                }
-                
+            start_coords = self.get_coordinates(start_location)
+            end_coords = self.get_coordinates(end_location)
+            if not start_coords or not end_coords:
+                print(f"Could not find coordinates for {start_location} or {end_location}")
+                return None
+            
+            route_data = self.get_route_from_osrm(start_coords, end_coords)
+            if route_data:
+                return route_data
+            
+            distance = self.calculate_haversine_distance(
+                start_coords[0], start_coords[1],
+                end_coords[0], end_coords[1]
+            )
+            
+            duration = distance / 60.0
+            
+            return {
+                'distance_km': distance,
+                'duration_hours': duration,
+                'status': 'HAVERSINE_FALLBACK',
+                'coordinates': [list(start_coords), list(end_coords)]
+            }
+
         except Exception as e:
             print(f"Error getting distance: {e}")
             return None
@@ -99,16 +164,21 @@ class RouteOptimizer:
         base_route = self.get_distance_and_duration(start_location, end_location)
         
         if base_route:
-            route_types = ['Fastest Route', 'Eco-Friendly Route', 'Balanced Route']
+            route_types = [
+                ('Fastest Route', 1.0, 0.9, 'High'),
+                ('Eco-Friendly Route', 1.1, 1.2, 'Low'),
+                ('Balanced Route', 1.05, 1.05, 'Medium')
+            ]
             
-            for i, route_name in enumerate(route_types):
+            for route_name, distance_factor, duration_factor, traffic_level in route_types:
                 route = {
-                    'name': route_name,  # Use the predefined name
-                    'distance_km': base_route['distance_km'] * random.uniform(0.9, 1.2),
-                    'duration_hours': base_route['duration_hours'] * random.uniform(0.85, 1.25),
-                    'traffic_level': random.choice(['Low', 'Medium', 'High']),
+                    'name': route_name,
+                    'distance_km': base_route['distance_km'] * distance_factor,
+                    'duration_hours': base_route['duration_hours'] * duration_factor,
+                    'traffic_level': traffic_level,
                     'road_type': random.choice(['Highway', 'City Roads', 'Mixed']),
-                    'tolls': random.choice([True, False])
+                    'tolls': random.choice([True, False]),
+                    'coordinates': base_route.get('coordinates', [])
                 }
                 routes.append(route)
         
