@@ -5,10 +5,6 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import folium
-from streamlit_folium import st_folium
-import requests
-import json
 from data.data_handler import DataHandler
 from sklearn.preprocessing import StandardScaler
 from models.carbon_model import CarbonFootprintModel, TF_AVAILABLE
@@ -17,7 +13,9 @@ from geopy.distance import geodesic
 import tempfile
 import os
 from utils.route_optimizer import RouteOptimizer
-import sys
+import folium
+import webbrowser
+
 
 
 st.set_page_config(
@@ -94,7 +92,6 @@ class StreamlitCarbonFootprintGUI:
         return model
     
     def initialize_session_state(self):
-        """Initialize all session state variables to prevent KeyError exceptions"""
         defaults = {
             'data_loaded': False,
             'model_trained': False,
@@ -130,164 +127,6 @@ class StreamlitCarbonFootprintGUI:
             st.error(f"Distance calculation error: {e}")
             return 0
     
-    def get_route_from_osrm(self, start_coords, end_coords):
-        try:
-            url = f"http://router.project-osrm.org/route/v1/driving/{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}"
-            params = {
-                'overview': 'full',
-                'geometries': 'geojson',
-                'steps': 'true'
-            }
-            
-            response = requests.get(url, params=params, timeout=25)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data['routes']:
-                    route = data['routes'][0]
-                    coordinates = route['geometry']['coordinates']
-                    route_coords = [[coord[1], coord[0]] for coord in coordinates]
-                    
-                    return {
-                        'coordinates': route_coords,
-                        'distance': route['distance'] / 1000,
-                        'duration': route['duration'] / 3600,
-                    }
-            return None
-        except Exception as e:
-            st.error(f"OSRM routing error: {e}")
-            return None
-    
-    def get_route_alternatives(self, start_coords, end_coords):
-        routes = {}
-        main_route = self.get_route_from_osrm(start_coords, end_coords)
-        
-        if main_route:
-            base_distance = main_route['distance']
-            base_duration = main_route['duration']
-            
-            routes['Fastest Route'] = {
-                'coordinates': main_route['coordinates'],
-                'distance': base_distance,
-                'duration': base_duration,
-                'carbon': base_distance * 0.12,
-                'color': 'red',
-                'description': 'Fastest route using highways and main roads'
-            }
-            
-            routes['Eco-Friendly Route'] = {
-                'coordinates': main_route['coordinates'],
-                'distance': base_distance * 1.05,
-                'duration': base_duration * 1.1,
-                'carbon': base_distance * 0.08,
-                'color': 'green',
-                'description': 'Optimized for lower fuel consumption and emissions'
-            }
-            
-            routes['Balanced Route'] = {
-                'coordinates': main_route['coordinates'],
-                'distance': base_distance * 1.02,
-                'duration': base_duration * 1.05,
-                'carbon': base_distance * 0.10,
-                'color': 'blue',
-                'description': 'Balance between time and fuel efficiency'
-            }
-        else:
-            # Fallback to direct route
-            direct_coords = [start_coords, end_coords]
-            fallback_distance = self.calculate_route_distance(start_coords, end_coords)
-            
-            routes['Direct Route'] = {
-                'coordinates': direct_coords,
-                'distance': fallback_distance,
-                'duration': fallback_distance / 60,
-                'carbon': fallback_distance * 0.12,
-                'color': 'red',
-                'description': 'Direct route (routing service unavailable)'
-            }
-        
-        return routes
-    
-    def create_route_map(self, start_coords, end_coords, route_type='Eco-Friendly Route'):
-        # Create a stable key for caching
-        key = f"route_map_{start_coords[0]:.4f}_{start_coords[1]:.4f}_{end_coords[0]:.4f}_{end_coords[1]:.4f}_{route_type}"
-        
-        # Check if we already have this exact map cached
-        if (
-            'last_route_map_key' in st.session_state and
-            st.session_state.get('last_route_map_key') == key and
-            'route_map_cache' in st.session_state and
-            st.session_state['route_map_cache'] is not None and
-            'route_data_cache' in st.session_state and
-            st.session_state['route_data_cache'] is not None
-        ):
-            return st.session_state['route_map_cache'], st.session_state['route_data_cache']
-
-        try:
-            center_lat = (start_coords[0] + end_coords[0]) / 2
-            center_lon = (start_coords[1] + end_coords[1]) / 2
-
-            m = folium.Map(
-                location=[center_lat, center_lon],
-                zoom_start=8,
-                tiles='OpenStreetMap'
-            )
-
-            routes = self.get_route_alternatives(start_coords, end_coords)
-
-            if not routes:
-                return None, None
-
-            folium.Marker(
-                start_coords,
-                popup=f"<b>START</b><br>Coordinates: {start_coords[0]:.4f}, {start_coords[1]:.4f}",
-                tooltip="Start Location",
-                icon=folium.Icon(color='green', icon='play')
-            ).add_to(m)
-
-            folium.Marker(
-                end_coords,
-                popup=f"<b>DESTINATION</b><br>Coordinates: {end_coords[0]:.4f}, {end_coords[1]:.4f}",
-                tooltip="End Location",
-                icon=folium.Icon(color='red', icon='stop')
-            ).add_to(m)
-
-            selected_route = routes.get(route_type, list(routes.values())[0])
-            folium.PolyLine(
-                selected_route['coordinates'],
-                color=selected_route['color'],
-                weight=6,
-                opacity=0.8,
-                popup=f"<b>{route_type}</b><br>Distance: {selected_route['distance']:.1f} km<br>Duration: {selected_route['duration']:.1f} hours<br>Carbon: {selected_route['carbon']:.1f} kg CO2"
-            ).add_to(m)
-
-            for route_name, route_data in routes.items():
-                if route_name != route_type:
-                    folium.PolyLine(
-                        route_data['coordinates'],
-                        color=route_data['color'],
-                        weight=3,
-                        opacity=0.4,
-                        popup=f"<b>{route_name}</b><br>Distance: {route_data['distance']:.1f} km"
-                    ).add_to(m)
-
-            if selected_route['coordinates']:
-                m.fit_bounds(selected_route['coordinates'])
-
-            # Save in session state to prevent reloading
-            st.session_state['route_map_cache'] = m
-            st.session_state['route_data_cache'] = routes
-            st.session_state['last_route_map_key'] = key
-            
-            # Also update the current map references
-            st.session_state['route_map'] = m
-            st.session_state['route_data'] = routes
-            
-            return m, routes
-
-        except Exception as e:
-            st.error(f"Map creation error: {e}")
-            return None, None
 
     
     def load_sample_data(self):
@@ -309,10 +148,7 @@ class StreamlitCarbonFootprintGUI:
                 st.session_state.sample_data
             )
             
-            # Always train a new model to show actual training progress
             self.carbon_model = CarbonFootprintModel()
-            
-            # Show training progress with a progress bar
             progress_bar = st.progress(0)
             status_text = st.empty()
             epoch_text = st.empty()
@@ -418,7 +254,6 @@ class StreamlitCarbonFootprintGUI:
                             st.error("Model training failed")   
                     st.divider()
             
-            # Route Configuration
             st.subheader("Route Configuration")
             start_location = st.text_input("Start Location", value="Mumbai, India")
             end_location = st.text_input("End Location", value="Delhi, India")
@@ -447,37 +282,127 @@ class StreamlitCarbonFootprintGUI:
                     else:
                         st.error("Optimization failed")
             
-            if st.button("Generate Route Map", 
+            if st.button("Open Interactive Map", 
                         use_container_width=True,
                         key="generate_map_button"):  
-                with st.spinner("Generating map..."):
-                    try:
-                        start_coords = self.get_coordinates(start_location)
-                        end_coords = self.get_coordinates(end_location)
+                try:
+                    # Check if we have existing optimization results
+                    if st.session_state.optimization_results:
+                        result = st.session_state.optimization_results
+                        st.info("Using existing optimization results for map generation...")
+                    else:
+                        st.info("Optimizing route for map generation...")
+                        result = self.route_optimizer.optimize_route(
+                            start_location, end_location, 
+                            cargo_weight, weather_condition, route_type
+                        )
+                    
+                    if result:
+                        temp_map_file = tempfile.NamedTemporaryFile(suffix='.html', delete=False)
                         
-                        if start_coords and end_coords:
-                            # Prevent multiple simultaneous map generations
-                            if not st.session_state.get('map_generation_in_progress', False):
-                                st.session_state.map_generation_in_progress = True
-                                map_obj, routes = self.create_route_map(start_coords, end_coords, route_type)
-                                st.session_state.map_generation_in_progress = False
-                                
-                                if map_obj:
-                                    st.session_state.route_map = map_obj
-                                    st.session_state.route_data = routes
-                                    st.success("Map generated successfully!")
-                                else:
-                                    st.error("Failed to generate map")
-                            else:
-                                st.warning("Map generation already in progress...")
-                        else:
-                            if not start_coords:
-                                st.error(f"Could not find coordinates for start location: {start_location}")
-                            if not end_coords:
-                                st.error(f"Could not find coordinates for end location: {end_location}")
-                    except Exception as e:
-                        st.session_state.map_generation_in_progress = False
-                        st.error(f"Error generating map: {str(e)}")
+                        # Get coordinates using the route optimizer's geocoding
+                        with st.spinner("Getting location coordinates..."):
+                            start_coords = self.route_optimizer.get_coordinates(start_location)
+                            end_coords = self.route_optimizer.get_coordinates(end_location)
+                        
+                        if not start_coords or not end_coords:
+                            st.error(f"Could not find coordinates for {start_location} or {end_location}")
+                            st.info("Try using more specific location names (e.g., 'Mumbai, Maharashtra, India')")
+                            return
+                        
+                        start_lat, start_lng = start_coords
+                        end_lat, end_lng = end_coords
+                        
+                        m = folium.Map(location=[start_lat, start_lng], zoom_start=8)
+                        
+                        folium.Marker(
+                            [start_lat, start_lng],
+                            popup=f"<b>START</b><br>{start_location}",
+                            tooltip="Start Location",
+                            icon=folium.Icon(color='green', icon='play')
+                        ).add_to(m)
+                        
+                        folium.Marker(
+                            [end_lat, end_lng],
+                            popup=f"<b>END</b><br>{end_location}",
+                            tooltip="End Location",
+                            icon=folium.Icon(color='red', icon='stop')
+                        ).add_to(m)
+                        
+                        # Get alternative routes for visualization
+                        with st.spinner("Generating route alternatives..."):
+                            alternative_routes = self.route_optimizer.get_alternative_routes(start_location, end_location)
+                        
+                        if not alternative_routes:
+                            st.warning("Could not generate alternative routes, showing direct path only")
+                            direct_distance = self.route_optimizer.calculate_haversine_distance(
+                                start_coords[0], start_coords[1], end_coords[0], end_coords[1]
+                            )
+                            alternative_routes = [{
+                                'name': 'Direct Route',
+                                'distance_km': direct_distance,
+                                'duration_hours': direct_distance / 60,
+                                'traffic_level': 'Medium',
+                                'road_type': 'Mixed',
+                                'coordinates': [list(start_coords), list(end_coords)]
+                            }]
+                        
+                        # Define colors for different route types
+                        route_colors = {
+                            'Fastest Route': 'red',
+                            'Eco-Friendly Route': 'green',
+                            'Balanced Route': 'blue'
+                        }
+                        
+                        # Add all route alternatives to the map
+                        for i, route in enumerate(alternative_routes):
+                            route_name = route['name']
+                            color = route_colors.get(route_name, 'purple')
+                            
+                           
+                            route_coords = route.get('coordinates', [(start_lat, start_lng), (end_lat, end_lng)])
+                            
+                            
+                            route_carbon = self.route_optimizer.calculate_carbon_emissions(
+                                route['distance_km'], cargo_weight, 
+                                weather_condition=weather_condition,
+                                traffic_density=route['traffic_level']
+                            )
+                            
+                           
+                            weight = 8 if route_name == 'Eco-Friendly Route' else 5
+                            opacity = 0.9 if route_name == 'Eco-Friendly Route' else 0.6
+                            
+                            folium.PolyLine(
+                                locations=route_coords,
+                                color=color,
+                                weight=weight,
+                                opacity=opacity,
+                                popup=f"<b>{route_name}</b><br>Distance: {route['distance_km']:.1f} km<br>Duration: {route['duration_hours']:.1f} hours<br>Carbon: {route_carbon['carbon_emissions_kg']:.1f} kg CO2<br>Traffic: {route['traffic_level']}<br>Road Type: {route['road_type']}"
+                            ).add_to(m)
+                        
+                       
+                        legend_html = '''
+                        <div style="position: fixed; 
+                                    bottom: 50px; left: 50px; width: 200px; height: 120px; 
+                                    background-color: white; border:2px solid grey; z-index:9999; 
+                                    font-size:14px; padding: 10px">
+                        <h4>Route Types</h4>
+                        <p><i class="fa fa-minus" style="color:green"></i> Eco-Friendly Route (Recommended)</p>
+                        <p><i class="fa fa-minus" style="color:red"></i> Fastest Route</p>
+                        <p><i class="fa fa-minus" style="color:blue"></i> Balanced Route</p>
+                        </div>
+                        '''
+                        m.get_root().html.add_child(folium.Element(legend_html))
+                        
+                        m.save(temp_map_file.name)
+                        webbrowser.open(f'file://{os.path.abspath(temp_map_file.name)}')
+                        st.success("Interactive map opened in your default browser!")
+                        st.info("The map shows your optimized route with markers and route information.")
+                    else:
+                        st.error("Please optimize a route first before generating the map.")
+                except Exception as e:
+                    st.error(f"Error opening map: {str(e)}")
         
         # Main content area with tabs
         tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Analysis", "Route Map", "Data Overview"])
@@ -686,73 +611,125 @@ class StreamlitCarbonFootprintGUI:
             st.info("Please train the model first to see analysis results.")
     
     def render_route_map(self):
-        # Use st.session_state.get to avoid KeyError and ensure stability
-        try:
-            route_map = st.session_state.get('route_map', None)
-            route_data = st.session_state.get('route_data', None)
-            if route_map is not None:
-                st.subheader("Interactive Route Map")
-                try:
-                    # Use a unique key to prevent unnecessary re-renders
-                    map_key = f"route_map_{st.session_state.get('last_route_map_key', 'default')}"
-                    with st.container():
-                        map_data = st_folium(route_map, width=700, height=500, key=map_key)
-                except Exception as e:
-                    st.error(f"Error displaying route map: {str(e)}")
-                    st.info("Map display failed. This might be due to network issues or library conflicts.")
-                    return
-                # Route information
-                if route_data:
-                    st.subheader("Route Alternatives")
-                    for route_name, route_info in route_data.items():
-                        try:
-                            distance = route_info.get('distance', 0)
-                            duration = route_info.get('duration', 0)
-                            carbon = route_info.get('carbon', 0)
-                            description = route_info.get('description', 'No description available')
-                            color = route_info.get('color', 'blue')
-                            with st.expander(f"{route_name} - {distance:.1f} km"):
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.write(f"**Distance:** {distance:.1f} km")
-                                    st.write(f"**Duration:** {duration:.1f} hours")
-                                    st.write(f"**Carbon Emissions:** {carbon:.1f} kg CO2")
-                                with col2:
-                                    st.write(f"**Description:** {description}")
-                                    st.write(f"**Route Color:** {color}")
-                        except Exception as e:
-                            st.error(f"Error displaying route {route_name}: {str(e)}")
-                            continue
-            else:
-                st.info("Click 'Generate Route Map' in the sidebar to view the interactive map.")
-                # Default India map
-                india_center = [20.5937, 78.9629]
-                m = folium.Map(location=india_center, zoom_start=5)
-                # Add some major cities
-                cities = {
-                    'Mumbai': [19.0760, 72.8777],
-                    'Delhi': [28.6139, 77.2090],
-                    'Bangalore': [12.9716, 77.5946],
-                    'Chennai': [13.0827, 80.2707],
-                    'Kolkata': [22.5726, 88.3639]
-                }
-                for city, coords in cities.items():
-                    try:
-                        folium.Marker(
-                            coords,
-                            popup=city,
-                            tooltip=city,
-                            icon=folium.Icon(color='blue', icon='info-sign')
-                        ).add_to(m)
-                    except Exception as e:
-                        print(f"Error adding marker for {city}: {str(e)}")
-                try:
-                    st_folium(m, width=700, height=400)
-                except Exception as e:
-                    st.error(f"Error displaying default map: {str(e)}")
-        except Exception as e:
-            st.error(f"Unexpected error in render_route_map: {str(e)}")
-            st.info("Map functionality is temporarily unavailable. Please try again.")
+        st.subheader("Interactive Route Map")
+        
+        # Show status of current route optimization
+        if st.session_state.optimization_results:
+            result = st.session_state.optimization_results
+            st.success(f"Route optimized: {result['start_location']} → {result['end_location']}")
+        else:
+            st.warning("No route optimized yet. Please configure and optimize a route first.")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("""
+            ### Enhanced Interactive Route Mapping
+
+            1. **Configure Route Settings** in the sidebar:
+            - Enter start and end locations (e.g., "Mumbai, India" → "Delhi, India")
+            - Select route type: Eco-Friendly, Fastest, or Balanced
+            - Choose cargo weight and weather conditions
+
+            <br>
+
+            2. **Click 'Optimize Route'** to calculate emissions and cost estimates
+
+            <br>
+
+            3. **Click 'Open Interactive Map'** to view:
+            - Multiple route alternatives (color-coded)
+            - Real-world routing via OSRM service
+            - Detailed route information in popups
+            - Start/end markers with location details
+            """, unsafe_allow_html=True)
+
+        with col2:
+            st.markdown("""
+            ### Map Visualization Guide
+
+            **Eco-Friendly Route (Recommended)**
+            - Optimized for minimal carbon emissions
+            - May have longer travel time but lower environmental impact
+
+            **Fastest Route**
+            - Prioritizes shortest travel time
+            - Typically results in higher carbon emissions
+
+            **Balanced Route**
+            - Strikes a compromise between speed and sustainability
+            - Offers a moderate carbon footprint
+
+            **Interactive Features**
+            - Click on any route line to see detailed metrics
+            - Start and end markers provide location details
+            - Use pan and zoom to explore routes closely
+            - Refer to the legend for route type identification
+            """)
+    
+        if st.session_state.optimization_results:
+            st.subheader("Current Optimized Route Details")
+            result = st.session_state.optimization_results
+        
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Start Location", result['start_location'])
+                st.metric("Distance", f"{result['distance']:.1f} km")
+            
+            with col2:
+                st.metric("End Location", result['end_location'])
+                st.metric("Duration", f"{result['estimated_time']:.1f} hours")
+            
+            with col3:
+                st.metric("Vehicle Type", result.get('vehicle_type', 'Truck'))
+                st.metric("Fuel Type", result.get('fuel_type', 'Diesel'))
+            
+            with col4:
+                st.metric("Carbon Emissions", f"{result['optimized_emissions']:.1f} kg CO2", 
+                         delta=f"-{result['emission_reduction']:.1f}%")
+                st.metric("Total Cost", f"₹{result['cost']:.2f}")
+            
+            
+            st.subheader("Route Comparison")
+            if 'route_names' in result and 'carbon_emissions' in result:
+                comparison_data = []
+                route_names = result['route_names'][:3] if len(result['route_names']) >= 3 else result['route_names']
+                carbon_emissions = result['carbon_emissions'][:3] if len(result['carbon_emissions']) >= 3 else result['carbon_emissions']
+                
+                for i, (route_name, carbon) in enumerate(zip(route_names, carbon_emissions)):
+                    cost_multiplier = 1.0 + (i * 0.1)  
+                    comparison_data.append({
+                        'Route Type': route_name,
+                        'Carbon Emissions (kg CO2)': f"{carbon:.1f}",
+                        'Estimated Cost (₹)': f"{result['cost'] * cost_multiplier:.2f}",
+                        'Efficiency Rating': f"{100 - (i * 15):.0f}%"
+                    })
+                
+                route_df = pd.DataFrame(comparison_data)
+                st.dataframe(route_df, use_container_width=True)
+            
+            # Interactive map generation button
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("Generate Interactive Map", use_container_width=True, type="primary"):
+                    st.info("Click 'Open Interactive Map' in the sidebar to view the enhanced route visualization!")
+            
+            with col2:
+                if st.button("View Route Analysis", use_container_width=True):
+                    st.switch_page = "Analysis"  
+        
+        st.divider()
+    
+        st.markdown("""
+        ### Getting Started:
+        
+        1. Make sure you have configured your route settings in the sidebar
+        2. Click the **'Open Interactive Map'** button to launch the map window
+        3. The map will open in a separate window where you can interact with it freely
+        4. You can continue using this Streamlit interface while the map is open
+        
+        **Note:** The interactive map uses Folium with real OpenStreetMap data and OSRM routing. It runs in a separate tkinter window and can be opened in your browser for full interactivity including pan, zoom, and clickable route details.
+        """)
     
     def render_data_overview(self):
         if st.session_state.data_loaded and st.session_state.sample_data is not None:
