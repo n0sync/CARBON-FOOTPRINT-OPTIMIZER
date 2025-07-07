@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
@@ -18,7 +19,7 @@ class DataHandler:
         np.random.seed(42)
         random.seed(42)
 
-        cities = {
+        base_cities = {
             'Mumbai': (19.0760, 72.8777),
             'Delhi': (28.7041, 77.1025),
             'Bangalore': (12.9716, 77.5946),
@@ -30,6 +31,9 @@ class DataHandler:
             'Jaipur': (26.9124, 75.7873),
             'Lucknow': (26.8467, 80.9462)
         }
+        
+        cities = base_cities.copy()
+        cities.update({f"{city}, India": coords for city, coords in base_cities.items()})
 
         data = []
         start_date = datetime(2024, 1, 1)
