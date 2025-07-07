@@ -75,7 +75,7 @@ class StreamlitCarbonFootprintGUI:
         self.route_optimizer = RouteOptimizer()
         # Display TensorFlow status
         if not TF_AVAILABLE:
-            st.sidebar.warning("TensorFlow not available. Using Random Forest model for predictions.")
+            st.sidebar.warning("⚠️ TensorFlow not available. Using Random Forest model for predictions.")
         
         # Use cached model loader with 10 min TTL
         if 'carbon_model' not in st.session_state or st.session_state.carbon_model is None:
@@ -154,6 +154,7 @@ class StreamlitCarbonFootprintGUI:
             epoch_text = st.empty()
             loss_text = st.empty()
             
+            # Progress callback function
             def progress_callback(progress, epoch, logs):
                 progress_bar.progress(int(progress))
                 status_text.text(f"Training in progress... {progress:.1f}%")
@@ -163,9 +164,10 @@ class StreamlitCarbonFootprintGUI:
             
             status_text.text(f"Starting model training for {epochs} epochs...")
             
+            # Train the model with the specified epochs and progress callback
             self.carbon_model.train_model(X, y, epochs=epochs, progress_callback=progress_callback)
             
-     
+            # Final update
             progress_bar.progress(100)
             status_text.text("Training completed successfully!")
             epoch_text.text(f"Completed: {epochs} epochs")
@@ -178,6 +180,7 @@ class StreamlitCarbonFootprintGUI:
             return False
     
     def optimize_route(self, start, end, weight, weather, route_type):
+        # Use the model from session state if available and trained
         if 'carbon_model' in st.session_state and st.session_state.model_trained:
             self.carbon_model = st.session_state.carbon_model
         else:
@@ -215,8 +218,11 @@ class StreamlitCarbonFootprintGUI:
         </div>
         """, unsafe_allow_html=True)
         
+        # Sidebar for controls
         with st.sidebar:
             st.header("--Control Panel")
+            
+            # Data Management
             st.subheader("Data Management")
             col1, col2 = st.columns(2)
             with col1:
@@ -237,6 +243,7 @@ class StreamlitCarbonFootprintGUI:
                             use_container_width=True, 
                             disabled=not st.session_state.data_loaded,
                             key="train_model_button"):  
+                    # Clear any existing model to force retraining
                     st.session_state.carbon_model = None
                     st.session_state.model_trained = False
                     
@@ -340,21 +347,25 @@ class StreamlitCarbonFootprintGUI:
                                 'coordinates': [list(start_coords), list(end_coords)]
                             }]
                         
-                        # Define colors for different route types
                         route_colors = {
                             'Fastest Route': 'red',
                             'Eco-Friendly Route': 'green',
                             'Balanced Route': 'blue'
                         }
                         
-                        # Add all route alternatives to the map
                         for i, route in enumerate(alternative_routes):
                             route_name = route['name']
-                            color = route_colors.get(route_name, 'purple')
                             
-                           
+                            if 'Eco-Friendly' in route_name or 'Eco' in route_name:
+                                color = 'green'
+                            elif 'Fastest' in route_name or 'Fast' in route_name:
+                                color = 'red'
+                            elif 'Balanced' in route_name or 'Balance' in route_name:
+                                color = 'blue'
+                            else:
+                                color = route_colors.get(route_name, 'purple')
+                            
                             route_coords = route.get('coordinates', [(start_lat, start_lng), (end_lat, end_lng)])
-                            
                             
                             route_carbon = self.route_optimizer.calculate_carbon_emissions(
                                 route['distance_km'], cargo_weight, 
@@ -362,9 +373,18 @@ class StreamlitCarbonFootprintGUI:
                                 traffic_density=route['traffic_level']
                             )
                             
-                           
-                            weight = 8 if route_name == 'Eco-Friendly Route' else 5
-                            opacity = 0.9 if route_name == 'Eco-Friendly Route' else 0.6
+                            if 'Eco-Friendly' in route_name or 'Eco' in route_name:
+                                weight = 8
+                                opacity = 0.9
+                            elif 'Fastest' in route_name or 'Fast' in route_name:
+                                weight = 6
+                                opacity = 0.8
+                            elif 'Balanced' in route_name or 'Balance' in route_name:
+                                weight = 5
+                                opacity = 0.7
+                            else:
+                                weight = 5
+                                opacity = 0.6
                             
                             folium.PolyLine(
                                 locations=route_coords,
@@ -374,19 +394,6 @@ class StreamlitCarbonFootprintGUI:
                                 popup=f"<b>{route_name}</b><br>Distance: {route['distance_km']:.1f} km<br>Duration: {route['duration_hours']:.1f} hours<br>Carbon: {route_carbon['carbon_emissions_kg']:.1f} kg CO2<br>Traffic: {route['traffic_level']}<br>Road Type: {route['road_type']}"
                             ).add_to(m)
                         
-                       
-                        legend_html = '''
-                        <div style="position: fixed; 
-                                    bottom: 50px; left: 50px; width: 200px; height:auto; 
-                                    background-color: white; border:2px solid grey; z-index:9999; 
-                                    font-size:14px; padding: 10px">
-                        <h4>Route Types</h4>
-                        <p><i class="fa fa-minus" style="color:green"></i> Eco-Friendly Route (Recommended)</p>
-                        <p><i class="fa fa-minus" style="color:red"></i> Fastest Route</p>
-                        <p><i class="fa fa-minus" style="color:blue"></i> Balanced Route</p>
-                        </div>
-                        '''
-                        m.get_root().html.add_child(folium.Element(legend_html))
                         
                         m.save(temp_map_file.name)
                         webbrowser.open(f'file://{os.path.abspath(temp_map_file.name)}')
