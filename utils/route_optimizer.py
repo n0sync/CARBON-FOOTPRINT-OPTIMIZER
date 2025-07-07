@@ -161,13 +161,47 @@ class RouteOptimizer:
         base_route = self.get_distance_and_duration(start_location, end_location)
         
         if base_route:
+            start_coords = self.get_coordinates(start_location)
+            end_coords = self.get_coordinates(end_location)
+            
             route_types = [
                 ('Fastest Route', 1.0, 0.9, 'High'),
                 ('Eco-Friendly Route', 1.1, 1.2, 'Low'),
                 ('Balanced Route', 1.05, 1.05, 'Medium')
             ]
             
-            for route_name, distance_factor, duration_factor, traffic_level in route_types:
+            for i, (route_name, distance_factor, duration_factor, traffic_level) in enumerate(route_types):
+                base_coords = base_route.get('coordinates', [list(start_coords), list(end_coords)])
+                
+                if len(base_coords) > 2:
+                    route_coords = base_coords.copy()
+                else:
+                    lat1, lng1 = start_coords
+                    lat2, lng2 = end_coords
+                    
+                    offset = 0.01 * (i - 1) if i != 1 else 0
+                    mid_lat = (lat1 + lat2) / 2 + offset
+                    mid_lng = (lng1 + lng2) / 2 + offset * 0.5
+                    
+                    if route_name == 'Eco-Friendly Route':
+                        route_coords = [
+                            [lat1, lng1],
+                            [mid_lat + 0.02, mid_lng - 0.01],
+                            [lat2, lng2]
+                        ]
+                    elif route_name == 'Fastest Route':
+                        route_coords = [
+                            [lat1, lng1],
+                            [mid_lat - 0.01, mid_lng + 0.02],
+                            [lat2, lng2]
+                        ]
+                    else:
+                        route_coords = [
+                            [lat1, lng1],
+                            [mid_lat, mid_lng],
+                            [lat2, lng2]
+                        ]
+                
                 route = {
                     'name': route_name,
                     'distance_km': base_route['distance_km'] * distance_factor,
@@ -175,7 +209,7 @@ class RouteOptimizer:
                     'traffic_level': traffic_level,
                     'road_type': random.choice(['Highway', 'City Roads', 'Mixed']),
                     'tolls': random.choice([True, False]),
-                    'coordinates': base_route.get('coordinates', [])
+                    'coordinates': route_coords
                 }
                 routes.append(route)
         
