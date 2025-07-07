@@ -40,8 +40,7 @@ class RouteOptimizer:
             'Medium': 1.15,
             'High': 1.3
         }
-        
-        # Extended city coordinates with more Indian cities
+    
         self.city_coordinates = {
             'Mumbai, India': {'lat': 19.0760, 'lng': 72.8777},
             'Delhi, India': {'lat': 28.7041, 'lng': 77.1025},
@@ -66,18 +65,14 @@ class RouteOptimizer:
         }
     
     def get_coordinates(self, location):
-        """Get coordinates for any location using geocoding"""
         try:
-            # First check if it's in our cache
             if location in self.city_coordinates:
                 coords = self.city_coordinates[location]
                 return (coords['lat'], coords['lng'])
             
-            # Try geocoding
             location_data = self.geolocator.geocode(location)
             if location_data:
                 coords = (location_data.latitude, location_data.longitude)
-                # Cache for future use
                 self.city_coordinates[location] = {'lat': coords[0], 'lng': coords[1]}
                 return coords
             
@@ -87,7 +82,6 @@ class RouteOptimizer:
             return None
     
     def get_route_from_osrm(self, start_coords, end_coords):
-        """Get actual route data from OSRM routing service"""
         try:
             import requests
             url = f"http://router.project-osrm.org/route/v1/driving/{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}"
