@@ -377,7 +377,7 @@ class StreamlitCarbonFootprintGUI:
                        
                         legend_html = '''
                         <div style="position: fixed; 
-                                    bottom: 50px; left: 50px; width: 200px; height: 120px; 
+                                    bottom: 50px; left: 50px; width: 200px; height:auto; 
                                     background-color: white; border:2px solid grey; z-index:9999; 
                                     font-size:14px; padding: 10px">
                         <h4>Route Types</h4>
