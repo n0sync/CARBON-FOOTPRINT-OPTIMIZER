@@ -75,7 +75,7 @@ class StreamlitCarbonFootprintGUI:
         self.route_optimizer = RouteOptimizer()
         # Display TensorFlow status
         if not TF_AVAILABLE:
-            st.sidebar.warning("⚠️ TensorFlow not available. Using Random Forest model for predictions.")
+            st.sidebar.warning("TensorFlow not available. Using Random Forest model for predictions.")
         
         # Use cached model loader with 10 min TTL
         if 'carbon_model' not in st.session_state or st.session_state.carbon_model is None:
@@ -154,7 +154,6 @@ class StreamlitCarbonFootprintGUI:
             epoch_text = st.empty()
             loss_text = st.empty()
             
-            # Progress callback function
             def progress_callback(progress, epoch, logs):
                 progress_bar.progress(int(progress))
                 status_text.text(f"Training in progress... {progress:.1f}%")
@@ -164,10 +163,9 @@ class StreamlitCarbonFootprintGUI:
             
             status_text.text(f"Starting model training for {epochs} epochs...")
             
-            # Train the model with the specified epochs and progress callback
             self.carbon_model.train_model(X, y, epochs=epochs, progress_callback=progress_callback)
             
-            # Final update
+     
             progress_bar.progress(100)
             status_text.text("Training completed successfully!")
             epoch_text.text(f"Completed: {epochs} epochs")
@@ -180,7 +178,6 @@ class StreamlitCarbonFootprintGUI:
             return False
     
     def optimize_route(self, start, end, weight, weather, route_type):
-        # Use the model from session state if available and trained
         if 'carbon_model' in st.session_state and st.session_state.model_trained:
             self.carbon_model = st.session_state.carbon_model
         else:
@@ -218,11 +215,8 @@ class StreamlitCarbonFootprintGUI:
         </div>
         """, unsafe_allow_html=True)
         
-        # Sidebar for controls
         with st.sidebar:
             st.header("--Control Panel")
-            
-            # Data Management
             st.subheader("Data Management")
             col1, col2 = st.columns(2)
             with col1:
@@ -243,7 +237,6 @@ class StreamlitCarbonFootprintGUI:
                             use_container_width=True, 
                             disabled=not st.session_state.data_loaded,
                             key="train_model_button"):  
-                    # Clear any existing model to force retraining
                     st.session_state.carbon_model = None
                     st.session_state.model_trained = False
                     
